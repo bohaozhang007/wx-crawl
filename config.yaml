@@ -1,0 +1,17 @@
+crawl:
+  # 本次输入 CSV 路径。可以使用任意列结构，程序会扫描所有单元格中的公众号文章链接。
+  # 相对路径以项目顶层目录为基准。
+  # 识别出的公众号会更新到 account_sources.csv；输入的具体文章也会加入本次抓取。
+  input_csv: input_template.csv
+
+  # 抓取模式：
+  # incremental：增量模式，只抓取上次成功文章到最新文章之间的新增内容。
+  #              首次发现的新公众号只检查最新 articles_per_account 篇。
+  # window：窗口模式，只检查历史列表最新 articles_per_account 篇。
+  mode: incremental
+
+  # window 模式用于所有公众号；incremental 模式仅用于首次发现的新公众号。
+  # 必须大于 0。
+  # 已存在的文章会按 URL 去重，不会重复抓取。
+  # 输入 CSV 与 account_sources.csv 中的示例文章不受窗口或历史断点限制。
+  articles_per_account: 30

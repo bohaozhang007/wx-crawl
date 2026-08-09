@@ -1,0 +1,7 @@
+# Python 3.12（上游 wechat-mp-tools 当前依赖 mitmproxy 12）
+beautifulsoup4>=4.13
+lxml>=5.0
+PyYAML>=6.0
+qrcode[pil]>=8.0
+requests>=2.31
+tzdata>=2025.2

@@ -1,0 +1,6 @@
+/third_party/
+/results/
+/src/auth/config/
+
+__pycache__/
+*.py[cod]
