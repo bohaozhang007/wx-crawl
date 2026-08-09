@@ -1,7 +1,6 @@
 /third_party/
 /results/
 /src/auth/config/
-/run.sh
 
 __pycache__/
 *.py[cod]
