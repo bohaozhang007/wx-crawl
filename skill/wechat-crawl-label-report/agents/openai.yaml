@@ -1,4 +1,4 @@
 interface:
   display_name: "微信公众号爬取筛选报告"
-  short_description: "爬取并完整打标后筛选双重命中文章并返回摘要与链接结果"
-  default_prompt: "使用 $wechat-crawl-label-report 完成爬取、打标，并返回同时命中申请和领域分类的文章摘要。"
+  short_description: "爬取并完整读取文本后打标筛选双重命中文章并返回摘要链接"
+  default_prompt: "使用 $wechat-crawl-label-report 完成爬取、文本打标，并返回同时命中申请和领域分类的文章摘要。"

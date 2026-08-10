@@ -10,12 +10,11 @@ old articles into the report unless the user explicitly requests a backfill.
 
 ## 1. Crawl
 
-Follow `$wechat-crawl` from
-`/root/workspace/wx-crawl/skill/wechat-crawl/SKILL.md`: execute `./run.sh` from
-`/root/workspace/wx-crawl`, keep its live process handle, deliver a login QR to
-the chat immediately if it appears, and wait for the crawl to finish. Record the
-run directory printed by the crawler, or resolve the newest
-`results/record/<timestamp>/` directory after completion.
+Follow `$wechat-official-account-crawler` from
+`/root/workspace/wx-crawl/skill/wechat-crawl/SKILL.md`. Use its current
+Procedure, process tracking, authentication, and QR-delivery rules, and wait for
+the crawl to finish. Record the run directory printed by the crawler, or resolve
+the newest `results/record/<timestamp>/` directory after completion.
 
 Do not proceed to reporting after a failed or interrupted crawl unless the user
 asks to report partial results. A successful crawl may still have zero new
@@ -36,10 +35,10 @@ python3 /root/workspace/wx-crawl/skill/wechat-crawl-label-report/scripts/select_
 ```
 
 For every returned article directory, run the labeling workflow completely:
-read all text to EOF, inspect every image and other content asset, then write its
-validated `label.json` with the second skill's writer. Do not label from the
-title or grep alone. Do not use the second skill's all-history loop unless the
-user explicitly asks for a backfill.
+read all text to EOF, but do not open or inspect images, video, audio, or other
+binary assets. Write its validated `label.json` with the second skill's writer.
+Do not label from the title or grep alone. Do not use the second skill's
+all-history loop unless the user explicitly asks for a backfill.
 
 ## 3. Select the intersection
 
@@ -62,8 +61,9 @@ separately.
 
 ## 4. Return the report
 
-For each selected article, read enough of its complete `content.txt` and
-relevant inspected assets to write a factual, concise summary of 1-3 sentences.
+For each selected article, read enough of its complete textual `content.txt` and
+textual metadata to write a factual, concise summary of 1-3 sentences. Do not
+open or inspect any image or other media while summarizing.
 Do not invent details from the title or labels. Return a flat list in publish
 time descending order. Each item must contain exactly these user-facing fields:
 
@@ -79,5 +79,6 @@ separately: show one application category and all matched domain categories.
 When no article satisfies both conditions, say so explicitly and do not include
 non-matching articles merely because their title contains a keyword.
 
-If an article could not be fully inspected, leave it out and report its path and
-the unreadable asset after the main results. Do not write a speculative summary.
+If an article's text could not be fully read, leave it out and report its path
+and unreadable text file after the main results. Do not write a speculative
+summary.

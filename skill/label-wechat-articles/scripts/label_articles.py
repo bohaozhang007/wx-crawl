@@ -5,7 +5,6 @@ import argparse
 import json
 import mimetypes
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -14,19 +13,7 @@ from typing import Any
 ARTICLES_ROOT = Path("/root/workspace/wx-crawl/results/articles")
 APPLICATION_TYPES = ("科研项目申请", "科研指南申请", "都不是")
 DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
-IMAGE_SUFFIXES = {
-    ".avif",
-    ".bmp",
-    ".gif",
-    ".heic",
-    ".jpeg",
-    ".jpg",
-    ".png",
-    ".svg",
-    ".tif",
-    ".tiff",
-    ".webp",
-}
+TEXT_SUFFIXES = {".csv", ".htm", ".html", ".json", ".log", ".md", ".txt", ".xml"}
 ARTICLE_MARKERS = ("content.txt", "metadata.json", "data.json")
 
 
@@ -111,42 +98,32 @@ def pending_articles() -> list[Path]:
     return sorted(pending, key=lambda path: (path.stat().st_mtime_ns, str(path)), reverse=True)
 
 
-def detect_mime(path: Path) -> str:
-    guessed, _ = mimetypes.guess_type(path.name)
-    if guessed:
-        return guessed
-    try:
-        result = subprocess.run(
-            ["file", "--brief", "--mime-type", "--", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return "application/octet-stream"
-    return result.stdout.strip() or "application/octet-stream"
+def is_text_file(path: Path) -> bool:
+    return path.suffix.lower() in TEXT_SUFFIXES
 
 
 def inventory(article_dir: Path) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
+    ignored_media_count = 0
     for path in sorted(article_dir.rglob("*")):
         if not path.is_file() or path.name == "label.json":
             continue
-        mime_type = detect_mime(path)
-        is_image = path.suffix.lower() in IMAGE_SUFFIXES or mime_type.startswith("image/")
+        if not is_text_file(path):
+            ignored_media_count += 1
+            continue
+        mime_type, _ = mimetypes.guess_type(path.name)
         files.append(
             {
                 "path": str(path.relative_to(article_dir)),
                 "bytes": path.stat().st_size,
-                "mime_type": mime_type,
-                "kind": "image" if is_image else "content",
+                "mime_type": mime_type or "text/plain",
             }
         )
     return {
         "article_dir": str(article_dir),
         "files": files,
-        "image_count": sum(item["kind"] == "image" for item in files),
-        "content_file_count": sum(item["kind"] == "content" for item in files),
+        "text_file_count": len(files),
+        "ignored_media_count": ignored_media_count,
     }
 
 

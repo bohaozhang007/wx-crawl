@@ -1,6 +1,6 @@
 ---
 name: label-wechat-articles
-description: Fully inspect crawled WeChat Official Account articles, including complete text and every local image or other content asset, then write a validated label.json into each article directory. Use when an agent is asked to label, classify, tag, review, or backfill articles under /root/workspace/wx-crawl/results/articles by research-application type and technical domain.
+description: Read the complete text of crawled WeChat Official Account articles, without opening images or other media, then write a validated label.json into each article directory. Use when an agent is asked to label, classify, tag, review, or backfill articles under /root/workspace/wx-crawl/results/articles by research-application type and technical domain.
 ---
 
 # Label WeChat Articles
@@ -17,26 +17,24 @@ classify from only its title, summary, filename, keyword grep, or a partial read
    python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_articles.py next
    ```
 
-2. Inventory every local artifact in that article:
+2. Inventory the text files in that article:
 
    ```bash
    python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_articles.py inventory "<article-dir>"
    ```
 
-3. Inspect all of the article content before deciding:
+3. Inspect all textual article content before deciding:
 
    - Read `content.txt` from beginning to end. Use chunks when necessary and
      continue until EOF; do not rely on truncated command output.
-   - Read `metadata.json` and the useful article fields in other JSON/HTML files.
-     Use rendered/raw HTML or `data.json` to recover visible text, captions,
-     links, or media omitted from `content.txt`. Ignore JavaScript, CSS, URLs,
-     menus, advertisements, and related-article recommendations as evidence.
-   - Open every image listed by `inventory`, including the cover, at sufficient
-     resolution to understand both visuals and embedded text. Use OCR or closer
-     inspection when text is small. Inspect meaningful frames of animated GIFs.
-   - Inspect any video, audio, document, or unknown asset with an available
-     suitable tool. If an artifact cannot be read, do not write a speculative
-     label; report that article and the unreadable path.
+   - Read `metadata.json` and the useful article fields in every textual
+     JSON/HTML file. Use rendered/raw HTML or `data.json` to recover visible
+     text, captions, or links omitted from `content.txt`. Ignore JavaScript,
+     CSS, URLs, menus, advertisements, and related-article recommendations as
+     evidence.
+   - Do not open, OCR, thumbnail, or otherwise inspect images. Do not inspect
+     video, audio, PDF, or other binary/media assets. Classify strictly from
+     text; report only unreadable textual files as blockers.
 
 4. Choose both classification layers using the rules below.
 
@@ -58,27 +56,27 @@ classify from only its title, summary, filename, keyword grep, or a partial read
 
 Set `application_type` to exactly one of:
 
-- `科研指南申请`: The meaningful article text or image content contains a
+- `科研指南申请`: The meaningful article text contains a
   research/funding guide concept such as `指南`, `申报指南`, `征集指南`,
   `项目指南`, or an equivalent. Prefer this value when both guide and project
   terms match.
-- `科研项目申请`: No research-guide concept matches, but meaningful content
+- `科研项目申请`: No research-guide concept matches, but meaningful text
   contains a research project/application concept such as `项目`, `课题`,
   `专项`, `计划`, `基金`, `申报`, `申请`, `征集`, `揭榜挂帅`, `立项`,
   or an equivalent.
 - `都不是`: Neither rule matches.
 
 Use high recall as requested: one meaningful occurrence in the article's actual
-content is enough. Do not require the application or project to be the main
-topic. Do not count a generic software user guide, HTML/code token, navigation,
+text is enough. Do not require the application or project to be the main topic.
+Do not count a generic software user guide, HTML/code token, navigation,
 advertisement, or related-article title as a research-guide match.
 
 ## Technical domains
 
 Set `domains` to an array containing every matching canonical value below. A
-meaningful occurrence in text or an image is enough even when it is not the
-article's main topic. Judge each domain independently; do not infer one label
-only because another label matched.
+meaningful occurrence in text is enough even when it is not the article's main
+topic. Judge each domain independently; do not infer one label only because
+another label matched.
 
 - `无人机`: includes 无人飞行器, UAV, drone, and unambiguously drone-related
   low-altitude systems.
@@ -110,7 +108,7 @@ Write exactly one `label.json` in the article directory with only these fields:
 ```
 
 The writer validates values, orders domain labels canonically, and replaces the
-file atomically. Do not modify any crawled source content.
+file atomically. Do not modify any crawled source content or media.
 
 ## Completion checks
 
@@ -122,4 +120,4 @@ python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_artic
 ```
 
 Completion requires `pending` to be zero and every existing label to validate.
-Report totals for valid labels, pending articles, and blocked unreadable articles.
+Report totals for valid labels, pending articles, and blocked unreadable text files.
