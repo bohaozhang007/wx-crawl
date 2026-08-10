@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号文章打标"
+  short_description: "逐篇通读微信公众号文章全文和全部图片并写入双层 JSON 分类标签"
+  default_prompt: "使用 $label-wechat-articles 完整检查所有待处理文章并生成 label.json。"

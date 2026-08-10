@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号爬取"
+  short_description: "直接运行微信公众号爬取任务并返回需要的微信登录二维码"
+  default_prompt: "使用 $wechat-crawl 直接运行微信公众号爬取，并在需要登录时返回二维码。"
