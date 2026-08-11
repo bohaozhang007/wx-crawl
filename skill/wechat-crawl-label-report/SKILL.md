@@ -1,6 +1,6 @@
 ---
 name: wechat-crawl-label-report
-description: "Combine the WeChat crawler and article-labeling workflows: run a crawl, fully inspect and label the articles added by that run, then report only articles that match both a research project/guide application category and at least one technical domain such as drones, embodied intelligence, aerospace, satellites, large models, robots, or robotic arms. Use when an agent is asked to crawl and return a filtered article digest with title, categories, summary, and WeChat URL."
+description: "Combine WeChat crawling, text-only article labeling, SQLite persistence, and filtered reporting: run a crawl, fully inspect and label that run's articles, persist matching articles and summaries to results/articles.sqlite3, remove non-selected current-run source directories after verified import, and report only articles matching both a research project/guide application category and at least one technical domain. Use when an agent is asked to crawl, classify, store, clean up, or return a filtered WeChat article digest."
 ---
 
 # WeChat Crawl Label Report
@@ -59,13 +59,71 @@ or missing URL must not appear in the report. The selector accepts only the
 canonical values defined by the labeling skill and reports skipped records
 separately.
 
-## 4. Return the report
+## 4. Persist the filtered report
 
 For each selected article, read enough of its complete textual `content.txt` and
 textual metadata to write a factual, concise summary of 1-3 sentences. Do not
 open or inspect any image or other media while summarizing.
-Do not invent details from the title or labels. Return a flat list in publish
-time descending order. Each item must contain exactly these user-facing fields:
+Do not invent details from the title or labels. First save the summaries as a
+JSON object keyed by the article URL at:
+
+```text
+/root/workspace/wx-crawl/results/record/<timestamp>/article_summaries.json
+```
+
+Example:
+
+```json
+{
+  "https://mp.weixin.qq.com/s/example": "文章介绍……，并说明申报方向、截止时间和材料要求。"
+}
+```
+
+Then generate the validated machine-readable report:
+
+```bash
+python3 /root/workspace/wx-crawl/skill/wechat-crawl-label-report/scripts/select_articles.py write-report \
+  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>" \
+  --summaries "/root/workspace/wx-crawl/results/record/<timestamp>/article_summaries.json"
+```
+
+The command writes `filtered_articles.json` in the run directory. It fails if a
+selected article has no summary, an invalid label, or a missing URL. This file
+is the source of truth for database import and must be generated before any
+cleanup.
+
+## 5. Import and clean up
+
+Initialize the database when needed:
+
+```bash
+/root/workspace/wx-crawl/wx-crawl-db init
+```
+
+After `filtered_articles.json` is successfully written, import it:
+
+```bash
+/root/workspace/wx-crawl/wx-crawl-db ingest \
+  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>"
+```
+
+The importer reads and stores the full text, metadata, URL, title, labels, and
+summary. It is idempotent by URL. After a successful import, remove the
+non-selected article directories from this run as part of the normal workflow:
+
+```bash
+/root/workspace/wx-crawl/wx-crawl-db prune \
+  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>" \
+  --confirm-delete
+```
+
+Without `--confirm-delete`, `prune` only prints what would be deleted. Never
+delete article directories before the import succeeds. Omit the cleanup only
+when the user explicitly asks to retain the source directories.
+
+## 6. Return the report
+
+Return a flat list in publish time descending order. Each item must contain exactly these user-facing fields:
 
 ```markdown
 ### 文章标题

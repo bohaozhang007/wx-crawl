@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号文章数据库"
+  short_description: "通过 CLI 导入、查询和管理筛选后的微信公众号文章"
+  default_prompt: "使用 $wechat-article-database 管理筛选文章 SQLite：初始化、导入、查询、推送状态和安全清理。"

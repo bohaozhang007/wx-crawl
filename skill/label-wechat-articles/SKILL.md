@@ -56,20 +56,50 @@ classify from only its title, summary, filename, keyword grep, or a partial read
 
 Set `application_type` to exactly one of:
 
-- `科研指南申请`: The meaningful article text contains a
-  research/funding guide concept such as `指南`, `申报指南`, `征集指南`,
-  `项目指南`, or an equivalent. Prefer this value when both guide and project
-  terms match.
-- `科研项目申请`: No research-guide concept matches, but meaningful text
-  contains a research project/application concept such as `项目`, `课题`,
-  `专项`, `计划`, `基金`, `申报`, `申请`, `征集`, `揭榜挂帅`, `立项`,
-  or an equivalent.
-- `都不是`: Neither rule matches.
+- `科研指南申请`: A formal research/funding call that publishes or solicits a
+  guide (for example `申报指南`, `项目指南`, `任务指南`) and provides an
+  actionable route for applicants.
+- `科研项目申请`: A formal research/project call that meets the evidence test
+  below but is not a guide-led call.
+- `都不是`: The evidence test is not satisfied.
 
-Use high recall as requested: one meaningful occurrence in the article's actual
-text is enough. Do not require the application or project to be the main topic.
-Do not count a generic software user guide, HTML/code token, navigation,
-advertisement, or related-article title as a research-guide match.
+Use a high-precision, structure-first test. The article itself (not merely its
+title or a related-link list) must clearly be an official notice, announcement,
+call, or equivalent solicitation for a research/innovation project, topic,
+task, or `揭榜挂帅`. Require all of these components:
+
+1. **A solicitation action**: explicit wording such as `申报`, `征集`, `揭榜
+   挂帅`, `征集需求`, `公开征集`, `启动申报`, or equivalent, used as the
+   article's actual action rather than a historical mention.
+2. **A defined object**: named project/topic/task/technical direction or a
+   concrete scope of work. A bare mention of “项目” or “课题” is insufficient.
+3. **At least one execution signal**: a deadline or schedule; applicant
+   eligibility/qualifications; required materials or attachments; submission
+   platform/email/address; contact details; funding/support amount or period;
+   榜单、遴选或评审流程; or a comparable instruction that
+   lets an applicant act.
+
+Prefer `科研指南申请` when a guide is published or explicitly referenced as
+the governing document (`申报指南`, `指南见附件`, etc.). Otherwise use
+`科研项目申请` when the three components above are present. It is acceptable
+for a notice to target enterprises, universities, research institutes, or joint
+teams; the key is that it solicits a defined research/innovation task.
+
+The reference patterns are typical: an issuing authority identifies a concrete
+direction or list of topics, states who may apply (often universities, institutes,
+enterprises, or consortia), and gives dates, forms/attachments, an online or
+email submission route, review/selection steps, contacts, funding, or an
+implementation period. `揭榜挂帅` and `课题征集` are strong signals only when
+they appear in this complete notice structure; they are not automatic matches
+in commentary or retrospective reporting.
+
+Do **not** classify as either application type when the text is only a project
+result/news report, a researcher biography mentioning projects, a conference or
+training agenda, a generic event/contest registration, a product or
+infrastructure announcement, a policy interpretation without an open call, or
+an ordinary article that happens to contain keywords. A keyword in a title,
+footer, advertisement, navigation, or related-article recommendation is never
+enough. When evidence is ambiguous or incomplete, choose `都不是`.
 
 ## Technical domains
 

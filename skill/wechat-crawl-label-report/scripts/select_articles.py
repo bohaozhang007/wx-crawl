@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -209,19 +211,88 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
     return {"run_dir": str(run_dir), "count": len(matches), "articles": matches, "skipped": skipped}
 
 
+def load_summaries(path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read summaries JSON: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit("summaries JSON must map article URL (or article_dir/title) to a summary")
+    summaries: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, str) or not value.strip():
+            raise SystemExit("summaries JSON keys and non-empty string values are required")
+        summaries[key] = value.strip()
+    return summaries
+
+
+def write_report(run_dir: Path, summaries_path: Path, output_path: Path) -> None:
+    selected = select_matches(run_dir)
+    summaries = load_summaries(summaries_path)
+    articles: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for article in selected["articles"]:
+        summary = (
+            summaries.get(article["url"])
+            or summaries.get(article["article_dir"])
+            or summaries.get(article["title"])
+        )
+        if not summary:
+            missing.append(article["title"])
+            continue
+        articles.append({**article, "summary": summary})
+    if missing:
+        raise SystemExit("missing summaries for: " + "；".join(missing))
+    try:
+        output_path = output_path.resolve()
+        output_path.relative_to(run_dir.resolve())
+    except ValueError as exc:
+        raise SystemExit(f"output report must be inside run directory: {output_path}") from exc
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_dir.name,
+        "count": len(articles),
+        "articles": articles,
+        "skipped": selected["skipped"],
+    }
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_path.parent,
+            prefix=".filtered_articles.", suffix=".tmp", delete=False
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, output_path)
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Select current-run articles matching both label layers")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("candidates", "matches"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("--run-dir")
+    report_parser = subparsers.add_parser("write-report", help="persist selected articles and agent summaries")
+    report_parser.add_argument("--run-dir")
+    report_parser.add_argument("--summaries", required=True, help="JSON object keyed by URL, article_dir, or title")
+    report_parser.add_argument("--output", default="filtered_articles.json")
     args = parser.parse_args()
     run_dir = resolve_run_dir(args.run_dir)
     candidates, skipped = match_run_articles(run_dir)
     if args.command == "candidates":
         print(json.dumps({"run_dir": str(run_dir), "count": len(candidates), "articles": candidates, "skipped": skipped}, ensure_ascii=False, indent=2))
         return
-    print(json.dumps(select_matches(run_dir), ensure_ascii=False, indent=2))
+    if args.command == "matches":
+        print(json.dumps(select_matches(run_dir), ensure_ascii=False, indent=2))
+        return
+    write_report(run_dir, Path(args.summaries), (run_dir / args.output).resolve())
+    print(json.dumps({"run_dir": str(run_dir), "output": str((run_dir / args.output).resolve())}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

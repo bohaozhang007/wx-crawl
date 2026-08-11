@@ -10,9 +10,10 @@
 - [2. 项目结构](#2-项目结构)
 - [3. 快速开始](#3-快速开始)
 - [4. 爬取结果](#4-爬取结果)
-- [5. 使用 Codex 安装](#5-使用-codex-安装)
-- [6. 爬取流程与 Git 同步机制](#6-爬取流程与-git-同步机制)
-- [7. 常见问题](#7-常见问题)
+- [5. 筛选结果 SQLite](#5-筛选结果-sqlite)
+- [6. 使用 Codex 安装](#6-使用-codex-安装)
+- [7. 爬取流程与 Git 同步机制](#7-爬取流程与-git-同步机制)
+- [8. 常见问题](#8-常见问题)
 - [致谢](#致谢)
 
 ## 1. 项目作用
@@ -218,9 +219,48 @@ results/
 - `media/`：可用时保存封面和正文图片；
 - `fallback.html` 和 `fallback_metadata.json`：采用 `we-mp-rss` 回退结果时生成。
 
+## 5. 筛选结果 SQLite
+
+组合筛选 skill 会把同时命中申请类型和技术领域的文章写入
+`results/articles.sqlite3`。数据库保存标题、公众号、发布时间、原文链接、
+两层标签、Agent 摘要和正文文本；未入选文章仍会先保留，确认数据库导入成功
+后才可以清理。
+
+初始化数据库：
+
+```bash
+./wx-crawl-db init
+```
+
+导入某次运行生成的 `filtered_articles.json`（不删除文章目录）：
+
+```bash
+./wx-crawl-db ingest --run-dir results/record/<启动时间>
+```
+
+预览并确认删除该次运行中未入选的文章：
+
+```bash
+./wx-crawl-db prune --run-dir results/record/<启动时间>
+./wx-crawl-db prune --run-dir results/record/<启动时间> --confirm-delete
+# 清理历史上所有未入库文章（需显式确认）
+./wx-crawl-db prune --all-unselected --confirm-delete
+```
+
+查询和钉钉接入可使用 JSON 输出：
+
+```bash
+./wx-crawl-db list --domain 具身智能 --json
+./wx-crawl-db pending-delivery --channel dingtalk --json
+./wx-crawl-db mark-delivered --channel dingtalk --id 123
+```
+
+CLI 只负责数据库查询和推送状态记录，不直接耦合钉钉 Webhook。钉钉发送成功
+后调用 `mark-delivered`，即可避免重复推送。
+
 不要只依赖目录名判断文章是否相同。程序以元数据中的 URL 作为去重依据。
 
-## 5. 使用 Codex 安装
+## 6. 使用 Codex 安装
 
 ### 环境要求
 
@@ -263,11 +303,11 @@ third_party/
 
 项目固定第三方仓库版本，是因为 `wx-crawl` 会通过本地适配层调用其中部分 Python 模块和内部类。更新任一上游仓库后，可能需要同时调整并重新测试 `src/auth/` 或 `src/integrations/`。第三方 Git 工作区应保持无修改，以便在其他机器上准确复现相同环境。
 
-## 6. 爬取流程与 Git 同步机制
+## 7. 爬取流程与 Git 同步机制
 
 项目把“可以随仓库同步的公众号信息源”和“只保存在当前机器上的爬取状态”分开管理。一次正常运行分为以下三个阶段。
 
-### 6.1 根据输入 CSV 更新公众号登记表
+### 7.1 根据输入 CSV 更新公众号登记表
 
 1. 读取配置指定的 CSV，扫描其中每一个单元格，提取可识别的微信文章链接。
 2. 对 URL 做规范化和去重，避免同一个输入链接重复请求公众号解析。
@@ -281,7 +321,7 @@ third_party/
 
 因此，输入 CSV 没有识别到链接，只代表“本次没有新增公众号”；只要登记表非空，程序仍会继续爬取已有公众号。
 
-### 6.2 按完整登记表执行爬取
+### 7.2 按完整登记表执行爬取
 
 登记表更新完成后，程序会按照稳定的本地编号顺序，依次处理 `account_sources.csv` 中的每个公众号：
 
@@ -294,7 +334,7 @@ third_party/
 
 先更新登记表、再遍历完整登记表，可以确保本次刚发现的公众号立即进入同一轮完整爬取。
 
-### 6.3 Git 会同步哪些内容
+### 7.3 Git 会同步哪些内容
 
 `account_sources.csv` 会提交到 Git。其他机器拉取仓库后，可以同步以下公众号信息：
 
@@ -314,7 +354,7 @@ third_party/
 
 因此，新机器虽然能继承相同的公众号登记表，但没有原机器的本地文章断点。在 `incremental` 模式下，这些公众号会被视为“没有本地历史”，第一次只处理最新的 `articles_per_account` 条记录。如果希望另一台机器从完全相同的增量位置继续，需要单独复制 `results/articles/`，不要把它提交到 Git。
 
-## 7. 常见问题
+## 8. 常见问题
 
 ### 没有识别到文章链接
 
