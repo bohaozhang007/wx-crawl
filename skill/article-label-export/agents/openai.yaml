@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号文章筛选报告"
+  short_description: "处理已完成爬取的文章，打标、入库并返回项目指南与技术领域交集"
+  default_prompt: "使用 $article-label-export 处理已完成的微信公众号爬取结果，对指定运行进行文本打标、生成筛选报告、写入 SQLite，并返回同时命中申请类型和技术领域的文章。"

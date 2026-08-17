@@ -50,6 +50,7 @@ wx-crawl/
 │   ├── auth/                    认证存储与登录适配
 │   ├── crawler/                 爬取编排、内容校验与结果统计
 │   ├── integrations/            第三方工具的运行时适配
+│   ├── labeling/                模型 API 打标、判断规则与标签校验
 │   └── crawl.py                 命令行入口
 ├── install/
 │   ├── requirements.txt         wx-crawl 直接使用的依赖
@@ -102,6 +103,7 @@ crawl:
   input_csv: input_template.csv
   mode: incremental
   articles_per_account: 30
+  incremental_max_days: 1
 ```
 
 | 配置项 | 说明 |
@@ -109,10 +111,11 @@ crawl:
 | `input_csv` | 输入 CSV 的路径；不是绝对路径时，相对于仓库顶层目录 |
 | `mode` | 可选 `incremental` 或 `window` |
 | `articles_per_account` | 必须大于 0；用于 `window` 模式，以及 `incremental` 模式下首次发现的公众号 |
+| `incremental_max_days` | 增量模式最多回溯的天数，默认 1；必须大于 0，`window` 模式忽略 |
 
 两种模式的行为如下：
 
-- `incremental`（增量模式）：对于已经保存过文章的公众号，程序会从最新文章开始向前翻阅历史列表；遇到第一个本地已存在的 URL 时，将其视为上次爬取断点，断点之前的全部文章都作为本次下载候选。已有公众号不受 `articles_per_account` 限制。对于首次发现、尚无本地断点的公众号，只处理最新的 `articles_per_account` 条历史记录。
+- `incremental`（增量模式）：程序最多回溯 `incremental_max_days` 天，并从最新文章开始向前翻阅历史列表；遇到第一个本地已存在的 URL，或文章早于回溯时间边界时停止。边界内且本地不存在的文章作为本次下载候选。已有公众号不受 `articles_per_account` 限制。对于首次发现、尚无本地断点的公众号，仍只处理最新的 `articles_per_account` 条历史记录，但不会超过最大回溯天数。
 - `window`（窗口模式）：每个公众号都只把最新的 `articles_per_account` 条历史记录作为本次下载范围。
 
 无论使用哪种模式，本地已经保存的 URL 都会跳过。输入 CSV 中直接提供的文章链接，以及 `account_sources.csv` 中保存的示例文章链接，不受历史窗口大小限制。
@@ -149,6 +152,58 @@ python3 src/crawl.py --verbose
 ```
 
 任务运行时间较长时，可以按一次 `Ctrl+C` 安全中止。已经完成的文章会保留，程序会写入“已中断”的运行记录、清理临时文件，并关闭由本次任务启动的工具服务。
+
+### 3.5 通过模型 API 为已下载文章打标
+
+这个命令只负责打标，不会启动爬取，也不会执行筛选、生成摘要或写入 SQLite。
+
+默认情况下，打标程序会从 `~/.hermes/config.yaml` 和 `~/.hermes/.env` 继承
+Hermes Agent 当前使用的 provider、模型、API 地址和对应 API Key。因此，通过
+钉钉/Hermes 启动打标时，会直接复用 Agent 的模型账号，无须在本仓库中重复配置
+密钥。保持以下覆盖项为空即可使用默认行为：
+
+```yaml
+labeling:
+  provider: ""
+  model: ""
+  base_url: ""
+  concurrency: 2
+  timeout_seconds: 180
+  max_retries: 2
+```
+
+如果确实希望打标使用不同于 Hermes Agent 的模型，可以填写上述 YAML 配置，
+或者使用 `LABEL_PROVIDER`、`LABEL_MODEL`、`LABEL_BASE_URL` 和
+`LABEL_API_KEY` 临时覆盖。并发数、超时时间和重试次数也可以分别通过
+`LABEL_CONCURRENCY`、`LABEL_TIMEOUT_SECONDS` 和 `LABEL_MAX_RETRIES`
+覆盖。API Key 不得写入受 Git 跟踪的 YAML。继承 provider 时，程序会自动查找
+对应的密钥变量，例如 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`。
+
+先检查配置和决策树，不发送任何 API 请求：
+
+```bash
+.venv/bin/python -m src.labeling.cli --check
+```
+
+建议先从指定爬取批次中选一篇待处理文章测试：
+
+```bash
+.venv/bin/python -m src.labeling.cli \
+  --run-dir results/record/<timestamp> --limit 1
+```
+
+确认无误后，处理该批次中全部缺少标签或标签无效的文章：
+
+```bash
+.venv/bin/python -m src.labeling.cli \
+  --run-dir results/record/<timestamp>
+```
+
+程序会把每篇文章的完整 `content.txt`、元数据、带版本的决策树和研究方向配置
+发送给指定模型。收到结构化结果后，程序还会在本地校验标签和原文证据，全部通过
+才会原子写入 `label.json`。已经具有有效 v2 标签的文章会自动跳过；无效或旧版标签
+只有在新结果通过校验后才会被替换。如果确实需要重新判断已经具有有效 v2 标签的
+文章，再使用 `--replace`。
 
 ### 注意事项
 

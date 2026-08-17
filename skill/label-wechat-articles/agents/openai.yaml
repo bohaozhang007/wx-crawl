@@ -1,4 +1,4 @@
 interface:
-  display_name: "微信公众号文章打标"
-  short_description: "仅读文章文本，按高精度申报证据和技术领域写入双层 JSON 标签"
-  default_prompt: "使用 $label-wechat-articles 完整读取所有待处理文章文本并生成 label.json。"
+  display_name: "微信公众号文章决策树打标"
+  short_description: "通过单模型Python程序批量生成可追溯的文章标签"
+  default_prompt: "使用 $label-wechat-articles 检查配置后运行单模型 Python 打标器，并汇报打标、失败和跳过数量。"

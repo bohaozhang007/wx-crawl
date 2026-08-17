@@ -44,6 +44,7 @@ wx-crawl/
 │   ├── auth/                    Authentication storage and login adapter
 │   ├── crawler/                 Crawl orchestration, validation, and reporting
 │   ├── integrations/            Runtime adapters for third-party tools
+│   ├── labeling/                Model API labeling, rules, and label validation
 │   └── crawl.py                 Command-line entry point
 ├── install/
 │   ├── requirements.txt         Dependencies used directly by wx-crawl
@@ -96,6 +97,7 @@ crawl:
   input_csv: input_template.csv
   mode: incremental
   articles_per_account: 30
+  incremental_max_days: 1
 ```
 
 | Setting | Meaning |
@@ -103,10 +105,11 @@ crawl:
 | `input_csv` | Input CSV path, relative to the repository root unless absolute |
 | `mode` | `incremental` or `window` |
 | `articles_per_account` | Positive history-window size used by `window` mode and by newly discovered accounts in `incremental` mode |
+| `incremental_max_days` | Maximum lookback in days for `incremental` mode (default `1`, must be positive); ignored by `window` mode |
 
 The modes behave as follows:
 
-- `incremental`: for an account with locally stored articles, the first matching local URL found while paging backward through the account history acts as the breakpoint. All newer history entries become download candidates. This mode is not capped by `articles_per_account` for an existing account. For a newly discovered account with no local breakpoint, the latest `articles_per_account` history entries form the download range.
+- `incremental`: pages backward through history for at most `incremental_max_days` days. The first matching local URL, or the time boundary, stops the scan. Missing URLs within that boundary become download candidates. This mode is not capped by `articles_per_account` for an existing account. For a newly discovered account with no local breakpoint, the latest `articles_per_account` history entries form the download range, still bounded by the lookback period.
 - `window`: for every account, the latest `articles_per_account` history entries form the download range.
 
 In either mode, URLs already stored locally are skipped. Explicit URLs from the input CSV and the example URLs in `account_sources.csv` are considered independently of the history-window limit.
@@ -136,6 +139,60 @@ python3 src/crawl.py --verbose
 ```
 
 Press `Ctrl+C` once to stop a long run. Articles that were already completed remain available, an interrupted run record is written, temporary working data is removed, and any tool service started by that run is closed.
+
+### 3.5 Label downloaded articles through a model API
+
+This command performs labeling only. It does not crawl, select, summarize, or
+import articles into SQLite.
+
+By default, labeling inherits the active Hermes Agent provider, model, base URL,
+and provider API key from `~/.hermes/config.yaml` and `~/.hermes/.env`. Therefore,
+a DingTalk/Hermes run uses the same model account as the Agent without duplicating
+the key in this repository. Leave the override fields empty for this default:
+
+```yaml
+labeling:
+  provider: ""
+  model: ""
+  base_url: ""
+  concurrency: 2
+  timeout_seconds: 180
+  max_retries: 2
+```
+
+To deliberately use a different labeling model, set the YAML fields or override
+them with `LABEL_PROVIDER`, `LABEL_MODEL`, `LABEL_BASE_URL`, and `LABEL_API_KEY`.
+Concurrency, timeout, and retry settings can likewise be overridden with
+`LABEL_CONCURRENCY`, `LABEL_TIMEOUT_SECONDS`, and `LABEL_MAX_RETRIES`. Never put
+an API key in tracked YAML. For inherited providers, the program resolves the
+matching key name, such as `DEEPSEEK_API_KEY` or `OPENAI_API_KEY`.
+
+Check the configuration and decision-tree rules without sending an API request:
+
+```bash
+.venv/bin/python -m src.labeling.cli --check
+```
+
+Test one pending article from a specific crawl run first:
+
+```bash
+.venv/bin/python -m src.labeling.cli \
+  --run-dir results/record/<timestamp> --limit 1
+```
+
+Then label every missing or invalid article in that run:
+
+```bash
+.venv/bin/python -m src.labeling.cli \
+  --run-dir results/record/<timestamp>
+```
+
+The program sends each complete `content.txt`, its metadata, the versioned
+decision tree, and the research profile to the configured model. It validates
+the structured response and quoted evidence locally before atomically writing
+`label.json`. Existing valid v2 labels are skipped. Invalid or legacy labels are
+replaced only after a new valid result is available. Use `--replace` only when
+you intentionally want to relabel articles that already have a valid v2 label.
 
 ### Notes
 

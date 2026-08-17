@@ -5,14 +5,28 @@ import argparse
 import json
 import mimetypes
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.labeling.schema import (  # noqa: E402
+    APPLICATION_TYPES,
+    DECISIONS,
+    DOMAINS,
+    EVIDENCE_TYPES,
+    SCHEMA_VERSION,
+    load_tree_spec,
+    read_label,
+    validate_payload,
+)
+
 ARTICLES_ROOT = Path("/root/workspace/wx-crawl/results/articles")
-APPLICATION_TYPES = ("科研项目申请", "科研指南申请", "都不是")
-DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
 TEXT_SUFFIXES = {".csv", ".htm", ".html", ".json", ".log", ".md", ".txt", ".xml"}
 ARTICLE_MARKERS = ("content.txt", "metadata.json", "data.json")
 
@@ -50,47 +64,12 @@ def resolve_article_dir(raw_path: str) -> Path:
     return path
 
 
-def validate_payload(payload: Any) -> list[str]:
-    errors: list[str] = []
-    if not isinstance(payload, dict):
-        return ["root value must be a JSON object"]
-
-    expected_keys = {"application_type", "domains"}
-    actual_keys = set(payload)
-    if actual_keys != expected_keys:
-        errors.append(
-            "keys must be exactly application_type and domains; got "
-            + ", ".join(sorted(actual_keys))
-        )
-
-    application_type = payload.get("application_type")
-    if application_type not in APPLICATION_TYPES:
-        errors.append("application_type is not an allowed value")
-
-    domains = payload.get("domains")
-    if not isinstance(domains, list):
-        errors.append("domains must be a JSON array")
-    else:
-        unknown = [value for value in domains if value not in DOMAINS]
-        if unknown:
-            errors.append("domains contains unknown values: " + ", ".join(map(str, unknown)))
-        if len(domains) != len(set(map(str, domains))):
-            errors.append("domains contains duplicate values")
-        expected_order = [domain for domain in DOMAINS if domain in domains]
-        if domains != expected_order:
-            errors.append("domains is not in canonical order")
-    return errors
-
-
 def label_errors(article_dir: Path) -> list[str]:
     label_path = article_dir / "label.json"
     if not label_path.is_file():
         return ["label.json is missing"]
-    try:
-        payload = json.loads(label_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return [f"cannot read valid JSON: {exc}"]
-    return validate_payload(payload)
+    _, errors = read_label(label_path)
+    return errors
 
 
 def pending_articles() -> list[Path]:
@@ -129,6 +108,11 @@ def inventory(article_dir: Path) -> dict[str, Any]:
 
 def write_label(
     article_dir: Path,
+    decision: str,
+    reason_code: str,
+    decision_path: list[str],
+    reason: str,
+    evidence: list[list[str]],
     application_type: str,
     domains: list[str],
     replace: bool,
@@ -138,9 +122,23 @@ def write_label(
         existing_errors = label_errors(article_dir)
         if not existing_errors:
             raise LabelError(f"valid label already exists; use --replace to overwrite: {label_path}")
+        raise LabelError(
+            f"invalid or legacy label already exists; re-read the article and use --replace: {label_path}"
+        )
 
     selected = set(domains)
+    tree_spec = load_tree_spec()
     payload = {
+        "schema_version": SCHEMA_VERSION,
+        "tree_version": tree_spec["version"],
+        "decision": decision,
+        "decision_path": decision_path,
+        "reason_code": reason_code,
+        "reason": reason.strip(),
+        "evidence": [
+            {"type": evidence_type, "location": location.strip(), "text": text.strip()}
+            for evidence_type, location, text in evidence
+        ],
         "application_type": application_type,
         "domains": [domain for domain in DOMAINS if domain in selected],
     }
@@ -193,6 +191,11 @@ def command_inventory(args: argparse.Namespace) -> None:
 def command_write(args: argparse.Namespace) -> None:
     path = write_label(
         resolve_article_dir(args.article_dir),
+        args.decision,
+        args.reason_code,
+        args.path_step,
+        args.reason,
+        args.evidence,
         args.application_type,
         args.domain,
         args.replace,
@@ -240,6 +243,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     write_parser = subparsers.add_parser("write", help="validate and atomically write label.json")
     write_parser.add_argument("article_dir")
+    write_parser.add_argument("--decision", required=True, choices=DECISIONS)
+    write_parser.add_argument("--reason-code", required=True)
+    write_parser.add_argument(
+        "--path-step",
+        action="append",
+        default=[],
+        required=True,
+        help="repeat ordered steps such as E1:PASS and O1:O1-D1",
+    )
+    write_parser.add_argument("--reason", required=True)
+    write_parser.add_argument(
+        "--evidence",
+        action="append",
+        nargs=3,
+        metavar=("TYPE", "LOCATION", "TEXT"),
+        default=[],
+        required=True,
+        help="repeat TYPE LOCATION TEXT; TYPE follows the v2 evidence vocabulary",
+    )
     write_parser.add_argument("--application-type", required=True, choices=APPLICATION_TYPES)
     write_parser.add_argument("--domain", action="append", default=[], choices=DOMAINS)
     write_parser.add_argument("--replace", action="store_true")
@@ -255,6 +277,10 @@ def main() -> None:
     args = parser.parse_args()
     if getattr(args, "limit", 1) < 1:
         parser.error("--limit must be at least 1")
+    if getattr(args, "evidence", None):
+        invalid_types = [item[0] for item in args.evidence if item[0] not in EVIDENCE_TYPES]
+        if invalid_types:
+            parser.error("invalid --evidence TYPE: " + ", ".join(invalid_types))
     try:
         args.func(args)
     except LabelError as exc:

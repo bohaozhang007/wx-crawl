@@ -6,8 +6,9 @@ description: "Manage the SQLite database of filtered WeChat Official Account art
 # WeChat Article Database
 
 Use the repository CLI at `/root/workspace/wx-crawl/wx-crawl-db`. The database
-stores only articles that satisfy both label layers: `application_type` is
-`科研项目申请` or `科研指南申请`, and `domains` is non-empty. It keeps the
+stores only articles with a validated v2 label whose decision is `KEEP`. The
+v2 label contract itself requires a qualifying application type, a non-empty
+task-scope domain list, a terminal reason code, reasoning, and evidence. It keeps the
 title, URL, account, publish time, labels, Agent summary, and full text. The
 database is the durable store; `results/articles/` is the crawl staging area.
 
@@ -20,11 +21,11 @@ database is the durable store; `results/articles/` is the crawl staging area.
 - Complete and verify the database import before any cleanup.
 - Treat `prune --confirm-delete` and `prune --all-unselected --confirm-delete`
   as destructive operations. Run them only for the requested scope.
-- Current-run cleanup removes only candidates listed in that run's
-  `article_details.csv`; it does not remove historical directories.
-- Full-history cleanup preserves directories whose valid metadata URL already
-  exists in SQLite. Directories without a valid WeChat URL are reported as
-  skipped rather than deleted.
+- Current-run cleanup removes only explicit DROP candidates listed in that
+  run's `article_details.csv`; it preserves REVIEW and inconsistent unreported KEEP.
+- Full-history cleanup requires valid v2 labels, protects KEEP and REVIEW, and
+  considers only explicit DROP directories. DROP directories with an existing
+  SQLite row or without a valid WeChat URL are retained/reported rather than deleted.
 - Keep CLI JSON output available for callers; do not wrap it in prose when an
   Agent or webhook needs machine-readable data.
 
@@ -43,7 +44,7 @@ The default path is `/root/workspace/wx-crawl/results/articles.sqlite3`. Use
 
 Require a completed crawl and a valid run directory containing
 `filtered_articles.json`. If the report has not been generated, first use the
-`wechat-crawl-label-report` skill to read article text, create
+`article-label-export` skill to read article text, create
 `article_summaries.json`, and run its `write-report` command. Do not invent a
 summary or bypass the label validation.
 
@@ -114,7 +115,7 @@ successful external send. The CLI does not contact DingTalk itself.
 
 ## Cleanup
 
-Preview non-selected article directories from one crawl run:
+Preview explicit DROP article directories from one crawl run:
 
 ```bash
 /root/workspace/wx-crawl/wx-crawl-db prune \
@@ -122,7 +123,7 @@ Preview non-selected article directories from one crawl run:
 ```
 
 After verifying that the preceding import succeeded, delete only those
-current-run directories:
+current-run DROP directories. REVIEW and KEEP remain protected:
 
 ```bash
 /root/workspace/wx-crawl/wx-crawl-db prune \

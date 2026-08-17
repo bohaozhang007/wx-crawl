@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 import subprocess
@@ -9,13 +10,16 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from src.labeling.schema import read_label
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTICLES_ROOT = REPO_ROOT / "results" / "articles"
 DEFAULT_DB_PATH = REPO_ROOT / "results" / "articles.sqlite3"
-SELECTOR_SCRIPT = REPO_ROOT / "skill" / "wechat-crawl-label-report" / "scripts" / "select_articles.py"
+SELECTOR_SCRIPT = REPO_ROOT / "skill" / "article-label-export" / "scripts" / "select_articles.py"
 APPLICATION_TYPES = ("科研项目申请", "科研指南申请")
 DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
+LOGGER = logging.getLogger("article-label-export")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -92,11 +96,13 @@ def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def init_database(db_path: Path = DEFAULT_DB_PATH) -> None:
+    LOGGER.info("开始初始化数据库 db=%s", Path(db_path).resolve())
     with connect(db_path) as connection:
         connection.executescript(SCHEMA)
         connection.execute(
             "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1')"
         )
+    LOGGER.info("数据库初始化完成 db=%s", Path(db_path).resolve())
 
 
 def read_json(path: Path) -> Any:
@@ -230,10 +236,16 @@ def validate_article(item: Any) -> dict[str, Any]:
 
 def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     report_path = Path(report_path).resolve()
+    LOGGER.info("开始导入筛选报告 report=%s db=%s", report_path, Path(db_path).resolve())
     run_id, raw_articles = report_articles(report_path)
     if not run_id.strip():
         raise StorageError("report run_id is empty")
-    articles = [validate_article(item) for item in raw_articles]
+    LOGGER.info("筛选报告读取完成 run_id=%s raw_articles=%d", run_id, len(raw_articles))
+    articles: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_articles, start=1):
+        article = validate_article(item)
+        articles.append(article)
+        LOGGER.info("导入校验 [%d/%d] 已通过 title=%s url=%s", index, len(raw_articles), article["title"], article["url"])
     urls = [article["url"] for article in articles]
     if len(urls) != len(set(urls)):
         raise StorageError("filtered report contains duplicate article URLs")
@@ -302,12 +314,15 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
             )
             if existing:
                 updated += 1
+                LOGGER.info("导入文章 [%d/%d] 已更新 title=%s url=%s", inserted + updated, len(articles), article["title"], article["url"])
             else:
                 inserted += 1
+                LOGGER.info("导入文章 [%d/%d] 已新增 title=%s url=%s", inserted + updated, len(articles), article["title"], article["url"])
         connection.execute(
             "UPDATE crawl_runs SET imported_count = ?, status = 'imported' WHERE run_id = ?",
             (len(articles), run_id),
         )
+    LOGGER.info("筛选报告导入完成 run_id=%s articles=%d inserted=%d updated=%d", run_id, len(articles), inserted, updated)
     return {"run_id": run_id, "articles": len(articles), "inserted": inserted, "updated": updated}
 
 
@@ -387,17 +402,37 @@ def mark_delivered(db_path: Path, article_ids: Iterable[int], channel: str, resp
 
 
 def run_selector(run_dir: Path, command: str) -> dict[str, Any]:
+    LOGGER.info("调用选择脚本 command=%s run_dir=%s", command, run_dir)
     completed = subprocess.run(
         ["python3", str(SELECTOR_SCRIPT), command, "--run-dir", str(run_dir)],
         cwd=REPO_ROOT,
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
     )
     try:
-        return json.loads(completed.stdout)
+        payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise StorageError(f"selector returned invalid JSON: {exc}") from exc
+    LOGGER.info("选择脚本调用完成 command=%s run_dir=%s", command, run_dir)
+    return payload
+
+
+def require_run_labels(run_dir: Path) -> dict[str, Any]:
+    """Refuse destructive cleanup while any candidate article is unlabeled.
+
+    The selector status payload reports ``pending_label_count``; a non-zero
+    value means label.json files were never written for this run. Deleting
+    those directories would destroy the only copy of crawled articles, so this
+    guard aborts instead of pruning.
+    """
+    status = run_selector(run_dir, "status")
+    pending = int(status.get("pending_label_count", 0) or 0)
+    if pending:
+        raise StorageError(
+            f"refusing cleanup for {run_dir.name}: {pending} article(s) still need label.json; label before prune"
+        )
+    return status
 
 
 def prune_run(
@@ -408,52 +443,134 @@ def prune_run(
 ) -> dict[str, Any]:
     run_dir = Path(run_dir).resolve()
     report_path = Path(report_path).resolve()
+    LOGGER.info("开始清理本轮未入选文章 run_dir=%s report=%s confirm=%s", run_dir, report_path, confirm)
+    status = require_run_labels(run_dir)
     _, selected_items = report_articles(report_path)
     selected = {str(article_dir_path(item.get("article_dir"))) for item in selected_items}
+    LOGGER.info("读取已入选文章完成 selected=%d", len(selected))
     candidates_payload = run_selector(run_dir, "candidates")
     candidates = [article_dir_path(item.get("article_dir")) for item in candidates_payload.get("articles", [])]
-    unselected = [path for path in candidates if str(path) not in selected]
+    decisions = {
+        str(item.get("article_dir")): (item.get("label") or {}).get("decision")
+        for item in status.get("articles", [])
+        if isinstance(item, dict)
+    }
+    unselected = [
+        path
+        for path in candidates
+        if str(path) not in selected and decisions.get(str(path)) == "DROP"
+    ]
+    protected = [
+        {
+            "article_dir": str(path),
+            "decision": decisions.get(str(path), "UNKNOWN"),
+        }
+        for path in candidates
+        if str(path) not in selected and decisions.get(str(path)) != "DROP"
+    ]
+    LOGGER.info(
+        "清理范围计算完成 candidates=%d explicit_drop=%d protected=%d",
+        len(candidates),
+        len(unselected),
+        len(protected),
+    )
     if not confirm:
-        return {"deleted": 0, "would_delete": [str(path) for path in unselected], "confirmed": False}
+        LOGGER.info("清理预览完成 would_delete=%d", len(unselected))
+        return {
+            "deleted": 0,
+            "would_delete": [str(path) for path in unselected],
+            "protected": protected,
+            "confirmed": False,
+        }
     deleted: list[str] = []
-    for path in unselected:
+    for index, path in enumerate(unselected, start=1):
+        LOGGER.info("删除未入选文章目录 [%d/%d] path=%s", index, len(unselected), path)
         shutil.rmtree(path)
         deleted.append(str(path))
     with connect(db_path) as connection:
         connection.execute(
-            "UPDATE crawl_runs SET deleted_count = ?, status = 'imported_and_pruned' WHERE run_id = ?",
-            (len(deleted), run_dir.name),
+            "UPDATE crawl_runs SET deleted_count = ?, status = ? WHERE run_id = ?",
+            (
+                len(deleted),
+                "imported_and_pruned_review_pending"
+                if any(item["decision"] == "REVIEW" for item in protected)
+                else "imported_and_pruned",
+                run_dir.name,
+            ),
         )
-    return {"deleted": len(deleted), "paths": deleted, "confirmed": True}
+    LOGGER.info("本轮未入选文章清理完成 deleted=%d run_id=%s", len(deleted), run_dir.name)
+    return {"deleted": len(deleted), "paths": deleted, "protected": protected, "confirmed": True}
 
 
 def prune_all_unselected(db_path: Path = DEFAULT_DB_PATH, confirm: bool = False) -> dict[str, Any]:
+    LOGGER.info("开始全量未入选文章清理 confirm=%s db=%s", confirm, Path(db_path).resolve())
     with connect(db_path) as connection:
         kept_urls = {row[0] for row in connection.execute("SELECT url FROM articles")}
     if confirm and not kept_urls:
         raise StorageError("refusing all-unselected cleanup because the database has no articles")
     unselected: list[Path] = []
+    protected: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
-    for article_dir in all_article_directories():
+    article_dirs = all_article_directories()
+    invalid_labels: list[dict[str, Any]] = []
+    for article_dir in article_dirs:
+        label_path = article_dir / "label.json"
+        if not label_path.is_file():
+            invalid_labels.append({"article_dir": str(article_dir), "errors": ["label.json is missing"]})
+            continue
+        _, errors = read_label(label_path)
+        if errors:
+            invalid_labels.append({"article_dir": str(article_dir), "errors": errors})
+    if invalid_labels:
+        raise StorageError(
+            f"refusing all-unselected cleanup: {len(invalid_labels)} article(s) have missing or invalid v2 labels; relabel before prune"
+        )
+    LOGGER.info("全量文章目录扫描完成 article_dirs=%d kept_urls=%d", len(article_dirs), len(kept_urls))
+    for index, article_dir in enumerate(article_dirs, start=1):
+        label, errors = read_label(article_dir / "label.json")
+        if errors or label is None:
+            raise StorageError(f"label became invalid during cleanup scan: {article_dir}")
+        if label["decision"] != "DROP":
+            protected.append({"article_dir": str(article_dir), "decision": label["decision"]})
+            LOGGER.info(
+                "全量清理扫描 [%d/%d] 受保护 path=%s decision=%s",
+                index,
+                len(article_dirs),
+                article_dir,
+                label["decision"],
+            )
+            continue
         value = metadata(article_dir)
         url = str(value.get("url") or "").strip()
         if not is_wechat_url(url):
             skipped.append({"article_dir": str(article_dir), "reason": "valid WeChat URL is missing"})
+            LOGGER.warning("全量清理扫描 [%d/%d] 跳过 path=%s reason=valid WeChat URL is missing", index, len(article_dirs), article_dir)
             continue
         if url not in kept_urls:
             unselected.append(article_dir)
+            LOGGER.info("全量清理扫描 [%d/%d] 待删除 path=%s", index, len(article_dirs), article_dir)
     if not confirm:
+        LOGGER.info("全量清理预览完成 would_delete=%d skipped=%d", len(unselected), len(skipped))
         return {
             "deleted": 0,
             "would_delete": [str(path) for path in unselected],
+            "protected": protected,
             "skipped": skipped,
             "confirmed": False,
         }
     deleted: list[str] = []
-    for path in unselected:
+    for index, path in enumerate(unselected, start=1):
+        LOGGER.info("全量删除未入选文章目录 [%d/%d] path=%s", index, len(unselected), path)
         shutil.rmtree(path)
         deleted.append(str(path))
-    return {"deleted": len(deleted), "paths": deleted, "skipped": skipped, "confirmed": True}
+    LOGGER.info("全量未入选文章清理完成 deleted=%d skipped=%d", len(deleted), len(skipped))
+    return {
+        "deleted": len(deleted),
+        "paths": deleted,
+        "protected": protected,
+        "skipped": skipped,
+        "confirmed": True,
+    }
 
 
 def stats(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:

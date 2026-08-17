@@ -27,9 +27,9 @@ Do not use for arbitrary web pages, WeChat Channels video, mini-program content,
 ## Project Contract
 
 - Repository: `/root/workspace/wx-crawl`
-- Entrypoint: `python3 src/crawl.py`
-- Safe preflight: `python3 src/crawl.py --check`
-- Runtime helper: `scripts/run_crawl.py` in this skill directory
+- Entrypoint: `/root/workspace/wx-crawl/run.sh` (wrapper runs credential preflight, then `src/crawl.py`)
+- Crawler entrypoint: `python3 src/crawl.py`
+- Credential preflight: `python3 scripts/check_wechat_auth.py --check-only`
 - Persistent account registry: `account_sources.csv`
 - Derived archive: `results/articles/`
 - Global summary: `results/summary.csv`
@@ -56,6 +56,7 @@ Extract these optional values from the request:
 - One or more full `https://mp.weixin.qq.com/s/...` URLs.
 - Mode: `incremental` (default) or `window`.
 - History size: positive integer, defaulting to the current project setting.
+- Incremental lookback: `incremental_max_days` positive integer, default `1`; applies only to `incremental` mode.
 - Whether the user wants a readiness check, a real crawl, or only a result summary.
 
 If the user supplied no URL and asks to refresh/update, use the existing registry. If the request implies only one account, explain that the framework still processes the complete registry before running; do not falsely claim account-only isolation.
@@ -66,41 +67,40 @@ Use `read_file` on `config.yaml` and `account_sources.csv`. Report the registere
 
 ### 3. Enforce one shared task
 
-All callers and all DingTalk users share the same repository and archive. Invoke only `scripts/run_crawl.py`; it acquires `results/record/.hermes-request.lock` **before** changing `config.yaml` or creating temporary input. If another helper-driven request is active, it exits with code `75` and says `已有一个微信公众号爬取任务正在运行...，本次请求未重复启动。`
+All callers and DingTalk users share the same repository and archive. The
+crawler itself acquires `results/record/.crawler.lock` during real execution,
+covering direct, manual, and scheduled starts. If output says `已有一个爬取任务正在运行`, treat it as a duplicate request: do not start another
+process, kill the existing process, or retry in a loop.
 
-Treat exit code `75` as an idempotent duplicate request, not a crawl failure: do not start another process, do not modify configuration, and tell the caller that the existing shared task continues. Never kill or replace the first user's task merely because another user requested a refresh.
+### 4. Credential preflight before every real crawl
 
-The crawler also holds its own `results/record/.crawler.lock` during real execution, covering direct/manual crawler starts. If output says `已有一个爬取任务正在运行`, likewise attach conceptually to the existing run and do not retry in a loop.
+Always run the fast preflight before `src/crawl.py`:
 
-### 4. Preflight authentication before starting the crawler
-
-For the plain existing-registry run, first query the local account-pool status (reuse or start the compatible `wechat-mp-tools` service as described below). If it reports no usable account, immediately start QR login, capture the triggering caller destination, and send the verified QR to that caller before launching `scripts/run_crawl.py`. In a DM send to that caller's DM; in a group send to the same group with a native mention using the caller's stable inbound user ID. Do not start a doomed crawl just to discover `无可用账号` after 31 account checks.
-
-For current project settings, after authentication/preflight:
-
-```text
-terminal(command="python3 src/crawl.py --check", workdir="/root/workspace/wx-crawl", timeout=120)
+```bash
+python3 /root/workspace/wx-crawl/scripts/check_wechat_auth.py --check-only
 ```
 
-For request-specific URLs/mode/count, invoke the helper with `--check-only`; repeat `--url` for multiple links:
+The preflight checks both `/api/auth/status` and `/api/account-pool`. Continue only when `logged_in=true` and at least one account has `status=active`. The repository wrapper performs the same gate automatically:
 
-```text
-terminal(command="python3 <skill-dir>/scripts/run_crawl.py --check-only --url '<wechat-url>' --mode incremental --count 30", timeout=120)
+```bash
+/root/workspace/wx-crawl/run.sh --verbose
 ```
 
-Stop and report the exact error if preflight fails. Do not start a crawl with missing dependencies or invalid configuration.
+When credentials are absent/expired, the account pool has `active=0`, all accounts are `invalid`, or the API reports `WeReadError401`/token expiry, the preflight calls `/api/auth/login`, waits for a new QR, sends the verified image to the configured DingTalk group, and sends a native text mention to both configured recipients: Zhang Bohao (`021616681719-1773375672`) and Yang Donglin (`2669682637-288741163`). It waits for login success before starting the crawl. A timeout or failed QR delivery is terminal; do not start the crawler or claim success.
 
-### 5. Start the real crawl and enforce the authentication gate
-
-Crawls may run for a long time and may require QR login. Start them as a tracked background process with completion notification:
-
+### 5. Shared task and stale-lock gate
 ```text
-terminal(command="python3 <skill-dir>/scripts/run_crawl.py --verbose --url '<wechat-url>' --mode incremental --count 30", background=true, notify_on_complete=true)
+terminal(command="python3 src/crawl.py --verbose", workdir="/root/workspace/wx-crawl", background=true, notify_on_complete=true)
 ```
 
-For the existing registry with no new seed URL, omit all `--url` arguments.
+Alternatively use the repository wrapper, which clears proxy variables before
+invoking the same entrypoint:
 
-Immediately poll the tracked process. Treat any of these as a mandatory authentication trigger: `登录已过期`, `session expired`, `凭证已失效`, `无可用账号`, `暂无可用微信读书账号`, `正在生成登录二维码`, or a new `tools-log/wechat-login-qr.png` path. Do not let the crawl fail first and do not ask the user whether they want to log in.
+```text
+terminal(command="./run.sh --verbose", workdir="/root/workspace/wx-crawl", background=true, notify_on_complete=true)
+```
+
+When the scheduled task invokes `scripts/check_wechat_auth_notify.py`, that wrapper is the sole owner of QR delivery and authentication status messages. The Agent must not independently poll/login, send `MEDIA:` paths, forward a second QR, or claim status notifications that are not present in the wrapper output. The wrapper sends exactly one QR per distinct login qrcode URL, then sends a success or timeout status message.
 
 On trigger:
 
@@ -112,7 +112,10 @@ On trigger:
 6. Authentication is complete only when `/api/auth/status` reports `logged_in: true` and `login_state.status: success`, or the crawler logs `扫码成功`. Then let the original crawl continue automatically—do not wait for a separate user reply to resume it.
 7. Delete the temporary QR after success/expiry only if the crawler has not already removed it. Never expose tokens, cookies, or account-pool files.
 
-This QR-delivery gate is required for interactive and scheduled runs. A cron run must deliver the QR to its configured destination and report that it is waiting for a scan; it must not claim the crawl completed while authentication is pending.
+This QR-delivery gate is required for interactive and scheduled runs. A cron
+run must deliver the QR to its configured destination and report that it is
+waiting for a scan; it must not claim the crawl completed while authentication
+is pending.
 
 ### 6. Verify completion
 
@@ -158,7 +161,8 @@ For a recurring refresh, create a `cronjob` with a self-contained prompt that lo
 ## Pitfalls
 
 - Input URLs add discovery seeds but do not restrict the complete registry crawl.
-- `incremental` is uncapped for an existing account until a local URL breakpoint is found; a fresh machine uses `articles_per_account` as its initial range.
+- `incremental` scans at most `incremental_max_days` days (default 1) and stops at the first local URL breakpoint or the time boundary; a fresh machine also applies that boundary while using `articles_per_account` as its initial range.
+- Always run `scripts/check_wechat_auth.py` before a real crawl; do not wait for per-account identity validation to discover expired credentials.
 - `window` checks only the latest configured number of upstream history entries.
 - Only one crawler instance can use the repository at a time.
 - Port `127.0.0.1:5200` may be used by `wechat-mp-tools`; reuse only a compatible existing service.
@@ -168,9 +172,20 @@ For a recurring refresh, create a `cronjob` with a self-contained prompt that lo
 - Existing articles are deduplicated by normalized URL.
 - Interrupt with one `SIGINT`/Ctrl+C when possible so the crawler writes an interrupted record and cleans up services.
 
+## Existing runtime limitation
+
+The crawler now raises `AuthenticationRequiredError` when the local API reports
+an unavailable account, but DingTalk QR delivery is an Agent/gateway concern.
+For scheduled execution, the pipeline prompt must catch this signal, invoke the
+same QR flow, send the image to its configured origin group with native mention,
+and wait for login before continuing. Do not treat this error as an ordinary
+per-account warning or proceed to labeling/export with a failed crawl.
+
+- 认证预检脚本：`/root/workspace/wx-crawl/scripts/check_wechat_auth.py`
+- 统一运行入口：`/root/workspace/wx-crawl/run.sh`（先预检凭证，再运行爬取）
+
 ## Verification Checklist
 
-- [ ] Shared request lock was acquired; exit code `75` was treated as “already running,” never retried.
 - [ ] The request scope and complete-registry behavior were made clear.
 - [ ] `--check` passed before a real crawl.
 - [ ] Any required QR login was actually completed.

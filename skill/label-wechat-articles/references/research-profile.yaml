@@ -1,0 +1,65 @@
+profile_version: "1.0"
+
+matching_policy:
+  require_task_scope: true
+  supporting_terms_are_sufficient: false
+  match_all_confirmed_domains: true
+  inheritance:
+    satellite_implies_aerospace: false
+    aerospace_implies_satellite: false
+    robot_implies_embodied_ai: false
+    embodied_ai_implies_robot: false
+    robotic_arm_implies_robot: false
+    large_model_implies_embodied_ai: false
+    drone_implies_aerospace: false
+
+domains:
+  无人机:
+    direct_terms: [无人机, 无人飞行器, UAV, drone]
+    task_patterns: [无人机系统, 无人机集群, 飞控系统, 无人机自主导航, 无人机载荷]
+    supporting_terms: [低空飞行, 低空系统, 飞行平台, 空地协同]
+    insufficient_terms: [低空, 航空器, 飞行, 通航]
+    exclusions: [有人机, 普通航空运输]
+
+  卫星:
+    direct_terms: [卫星, satellite, 卫星星座, 遥感卫星, 通信卫星, 导航卫星]
+    task_patterns: [卫星载荷, 卫星通信, 卫星遥感, 星座组网, 星间链路, 卫星导航]
+    supporting_terms: [北斗, 遥感, 星座, 在轨]
+    insufficient_terms: [导航, 遥感, 空间信息, 星座]
+    exclusions: [非卫星语境中的北斗品牌, 星座文化]
+
+  具身智能:
+    direct_terms: [具身智能, embodied AI, embodied intelligence, 具身智能体]
+    task_patterns: [具身感知, 具身认知, 具身决策, 具身交互, 具身智能系统]
+    supporting_terms: [智能体, 世界模型, 视觉语言动作模型, VLA]
+    insufficient_terms: [智能体, 多模态, 人形机器人, 世界模型]
+    exclusions: [纯软件智能体, 未涉及物理交互的流程自动化]
+
+  大模型:
+    direct_terms: [大模型, 大语言模型, LLM, foundation model, 基础模型, 多模态大模型]
+    task_patterns: [大模型训练, 大模型推理, 大模型微调, 大模型评测, 行业大模型, 基础模型研发]
+    supporting_terms: [生成式人工智能, 多模态, 参数模型, 预训练模型]
+    insufficient_terms: [模型, 人工智能, 算法, GPT]
+    exclusions: [普通数学模型, 统计模型, 模型产品名称但任务不研究模型]
+
+  空天:
+    direct_terms: [空天, 航空航天, 航天, aerospace, spaceflight]
+    task_patterns: [航天器, 运载火箭, 空间飞行器, 深空探测, 在轨服务, 航空航天系统]
+    supporting_terms: [火箭, 飞船, 空间站, 临近空间]
+    insufficient_terms: [空间, 天空, 航空, 飞行]
+    exclusions: [数据空间, 网络空间, 地理空间]
+
+  机器人:
+    direct_terms: [机器人, robot, 人形机器人, 四足机器人, 工业机器人, 服务机器人]
+    task_patterns: [机器人控制, 机器人感知, 机器人导航, 机器人操作, 机器人系统]
+    supporting_terms: [自主移动, 人机协作, 运动控制, 智能装备]
+    insufficient_terms: [自动化, 智能装备, 无人系统, 机械设备]
+    exclusions: [软件机器人, RPA, 聊天机器人]
+
+  机械臂:
+    direct_terms: [机械臂, 机器人臂, robotic arm, manipulator]
+    task_patterns: [机械臂控制, 机械臂操作, 机械臂抓取, 机械臂规划, 多臂协作]
+    supporting_terms: [末端执行器, 抓取, 操作臂, 运动学]
+    insufficient_terms: [手臂, 抓取, 执行器, 运动学]
+    exclusions: [人体手臂, 非机器人语境的机械结构]
+

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
+import time
 from pathlib import Path
 
 from .db import (
@@ -21,6 +24,31 @@ from .db import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECORD_ROOT = REPO_ROOT / "results" / "record"
+LOG_PATH_NAME = "article_label_export.log"
+LOGGER = logging.getLogger("article-label-export")
+
+
+def setup_logging(log_dir: Path | None = None) -> None:
+    LOGGER.setLevel(logging.INFO)
+    for handler in LOGGER.handlers:
+        handler.close()
+    LOGGER.handlers.clear()
+    LOGGER.propagate = False
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    console = logging.StreamHandler(sys.stderr)
+    console.setFormatter(formatter)
+    LOGGER.addHandler(console)
+
+    if log_dir is None:
+        return
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_dir / LOG_PATH_NAME, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        LOGGER.addHandler(file_handler)
+    except OSError as exc:
+        LOGGER.warning("无法写入流程日志文件 %s: %s", log_dir / LOG_PATH_NAME, exc)
 
 
 def resolve_run_dir(raw: str | None) -> Path:
@@ -69,8 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = subparsers.add_parser("ingest", help="import a filtered_articles.json report")
     ingest.add_argument("--run-dir")
     ingest.add_argument("--report")
-    ingest.add_argument("--prune", action="store_true", help="preview or prune non-selected current-run articles")
-    ingest.add_argument("--confirm-delete", action="store_true", help="actually delete non-selected article directories")
+    ingest.add_argument("--prune", action="store_true", help="preview explicit DROP current-run articles")
+    ingest.add_argument("--confirm-delete", action="store_true", help="actually delete explicit DROP article directories")
 
     listing = subparsers.add_parser("list", help="list stored articles as JSON")
     listing.add_argument("--domain", choices=DOMAINS)
@@ -92,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     delivered.add_argument("--id", type=int, action="append", required=True)
     delivered.add_argument("--response", default="")
 
-    prune = subparsers.add_parser("prune", help="preview or delete non-selected current-run articles")
+    prune = subparsers.add_parser("prune", help="preview or delete explicit DROP current-run articles")
     prune.add_argument("--run-dir")
     prune.add_argument("--report")
     prune.add_argument("--all-unselected", action="store_true", help="scan all article directories, not just one run")
@@ -105,17 +133,28 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    run_dir_for_log: Path | None = None
+    if args.command in {"ingest", "prune"} and not getattr(args, "all_unselected", False):
+        try:
+            run_dir_for_log = resolve_run_dir(args.run_dir)
+        except StorageError:
+            run_dir_for_log = None
+    setup_logging(run_dir_for_log)
+    started = time.monotonic()
+    LOGGER.info("开始执行 wx-crawl-db command=%s db=%s", args.command, Path(args.db).resolve())
     try:
         if args.command == "init":
             init_database(args.db)
             output({"database": str(args.db.resolve()), "initialized": True})
         elif args.command == "ingest":
-            run_dir = resolve_run_dir(args.run_dir)
+            run_dir = run_dir_for_log or resolve_run_dir(args.run_dir)
+            LOGGER.info("开始导入命令 run_dir=%s", run_dir)
             report = report_path(run_dir, args.report)
             result = import_report(report, args.db)
             if args.prune:
                 result["prune"] = prune_run(run_dir, report, args.confirm_delete, args.db)
             output(result)
+            LOGGER.info("导入命令完成 run_id=%s articles=%s", result.get("run_id"), result.get("articles"))
         elif args.command == "list":
             output(query_articles(args.db, domain=args.domain, application_type=args.application_type, since=args.since, until=args.until, limit=args.limit, channel=args.channel, pending_only=args.pending_only))
         elif args.command == "pending-delivery":
@@ -126,13 +165,17 @@ def main() -> None:
             if args.all_unselected:
                 output(prune_all_unselected(args.db, args.confirm_delete))
             else:
-                run_dir = resolve_run_dir(args.run_dir)
+                run_dir = run_dir_for_log or resolve_run_dir(args.run_dir)
+                LOGGER.info("开始清理命令 run_dir=%s confirm=%s", run_dir, args.confirm_delete)
                 report = report_path(run_dir, args.report)
                 output(prune_run(run_dir, report, args.confirm_delete, args.db))
         elif args.command == "stats":
             output(stats(args.db))
     except (StorageError, OSError) as exc:
+        LOGGER.error("wx-crawl-db 执行失败 command=%s error=%s", args.command, exc)
         parser.error(str(exc))
+    finally:
+        LOGGER.info("wx-crawl-db 执行结束 command=%s elapsed=%.1fs", args.command, time.monotonic() - started)
 
 
 if __name__ == "__main__":

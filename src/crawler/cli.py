@@ -15,7 +15,7 @@ import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import unescape
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -32,6 +32,7 @@ try:
         service_environment,
     )
     from auth.storage import ensure_auth_layout
+    from auth.dingtalk_notify import send_login_qr
 except ModuleNotFoundError:
     from src.auth.wechat_mp_tools import (
         ensure_login as ensure_wechat_login,
@@ -39,6 +40,7 @@ except ModuleNotFoundError:
         service_environment,
     )
     from src.auth.storage import ensure_auth_layout
+    from src.auth.dingtalk_notify import send_login_qr
 from .content import (
     article_url_key,
     normalize_article_url,
@@ -68,6 +70,24 @@ PAGE_SIZE = 10
 MAX_EMPTY_PAGES = 2
 AUTH_WAIT_SECONDS = 300
 LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
+AUTH_ERROR_MARKERS = (
+    "账号池中无可用账号",
+    "暂无可用微信读书账号",
+    "凭证已失效",
+    "登录已过期",
+    "session expired",
+)
+
+
+class AuthenticationRequiredError(RuntimeError):
+    """The crawler cannot continue until WeChat Reading QR login succeeds."""
+
+
+def is_authentication_error(message: str) -> bool:
+    text = str(message).lower()
+    return any(marker.lower() in text for marker in AUTH_ERROR_MARKERS)
+
+
 WECHAT_ARTICLE_URL_RE = re.compile(
     r"https?://mp\.weixin\.qq\.com/s(?:/|\?)[^\s\"'<>]+",
     re.IGNORECASE,
@@ -130,6 +150,7 @@ class CrawlConfig:
     input_csv: Path
     mode: str
     articles_per_account: int
+    incremental_max_days: int = 1
 
 
 @dataclass
@@ -152,6 +173,14 @@ class CrawledArticle:
     title: str
     publish_time: int
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class ExistingArticle:
+    key: str
+    title: str
+    publish_time: int
+    path: Path
 
 
 @dataclass
@@ -233,8 +262,12 @@ def format_duration(seconds: float) -> str:
 
 
 def render_run_report(report: RunReport) -> str:
-    mode = "增量模式" if report.config.mode == "incremental" else (
-        f"窗口模式（最新 {report.config.articles_per_account} 篇）"
+    mode = (
+        f"增量模式（最多回溯 {report.config.incremental_max_days} 天）"
+        if report.config.mode == "incremental"
+        else (
+            f"窗口模式（最新 {report.config.articles_per_account} 篇）"
+        )
     )
     lines = [
         "微信公众号爬取时间报告",
@@ -279,10 +312,104 @@ def directory_size(path: Path) -> int:
     return total
 
 
+def timestamp_seconds(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        if value.isdigit():
+            numeric = int(value)
+        else:
+            try:
+                numeric_float = float(value)
+            except ValueError:
+                return None
+            if numeric_float <= 0:
+                return None
+            numeric = int(numeric_float)
+    elif isinstance(value, (int, float)):
+        if value <= 0:
+            return None
+        numeric = int(value)
+    else:
+        return None
+
+    if numeric <= 0:
+        return None
+    if numeric >= 10_000_000_000:
+        numeric = int(numeric / 1000)
+    return numeric if numeric > 0 else None
+
+
+def publish_datetime(value: object) -> datetime | None:
+    timestamp = timestamp_seconds(value)
+    if timestamp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, LOCAL_TIMEZONE)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def extract_source_publish_time(raw_html: str) -> int | None:
+    for pattern in (
+        r'\bct\s*=\s*["\']?(\d+)["\']?',
+        r'\bpublish_time\s*=\s*["\']?(\d+)["\']?',
+    ):
+        match = re.search(pattern, raw_html or "")
+        if match:
+            return timestamp_seconds(match.group(1))
+    return None
+
+
+def source_publication_timestamp(url: str, logger: logging.Logger) -> int | None:
+    if str(MP_PROJECT) not in sys.path:
+        sys.path.insert(0, str(MP_PROJECT))
+    try:
+        from backend.config import DEFAULT_HEADERS, get_proxies_dict, report_proxy_status
+    except Exception as exc:
+        logger.debug("无法加载 wechat-mp-tools 网络配置，跳过源头时间补充：%s", exc)
+        return None
+
+    proxy_url = None
+    try:
+        proxies = get_proxies_dict()
+        if proxies:
+            proxy_url = proxies.get("http")
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": "https://mp.weixin.qq.com/",
+            },
+            proxies=proxies,
+            timeout=30,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        try:
+            report_proxy_status(proxy_url, success=False)
+        except Exception:
+            pass
+        logger.debug("无法从文章源头确认发布时间 %s：%s", url, exc)
+        return None
+
+    try:
+        report_proxy_status(proxy_url, success=True)
+    except Exception:
+        pass
+
+    response.encoding = "utf-8"
+    return extract_source_publish_time(response.text)
+
+
 def format_publish_time(timestamp: int) -> str:
-    if timestamp <= 0:
+    published_at = publish_datetime(timestamp)
+    if published_at is None:
         return ""
-    return datetime.fromtimestamp(timestamp, LOCAL_TIMEZONE).strftime("%Y_%m_%d_%H_%M_%S")
+    return published_at.strftime("%Y_%m_%d_%H_%M_%S")
 
 
 def article_directory_info(article_dir: Path) -> tuple[int, str]:
@@ -293,10 +420,7 @@ def article_directory_info(article_dir: Path) -> tuple[int, str]:
         if not title:
             title = unescape(str(metadata.get("title") or "")).strip()
         if timestamp <= 0:
-            try:
-                timestamp = int(metadata.get("publish_time") or 0)
-            except (TypeError, ValueError):
-                timestamp = 0
+            timestamp = timestamp_seconds(metadata.get("publish_time")) or 0
 
     name = article_dir.name
     if timestamp <= 0 and len(name) >= 19:
@@ -491,7 +615,19 @@ def load_config() -> CrawlConfig:
         raise RuntimeError("config.yaml 缺少有效的 crawl.articles_per_account") from exc
     if value < 1:
         raise RuntimeError("crawl.articles_per_account 必须大于 0")
-    return CrawlConfig(input_csv=input_csv, mode=mode, articles_per_account=value)
+    max_days_raw = crawl.get("incremental_max_days", 1)
+    try:
+        max_days = int(max_days_raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("config.yaml 缺少有效的 crawl.incremental_max_days") from exc
+    if max_days < 1:
+        raise RuntimeError("crawl.incremental_max_days 必须大于 0")
+    return CrawlConfig(
+        input_csv=input_csv,
+        mode=mode,
+        articles_per_account=value,
+        incremental_max_days=max_days,
+    )
 
 
 def discover_seed_urls(input_csv: Path) -> list[str]:
@@ -557,6 +693,8 @@ def refresh_registered_accounts(
             try:
                 resolved = retry(lambda: resolve_account(api, account.sample_url))
             except Exception as exc:
+                if is_authentication_error(str(exc)):
+                    raise AuthenticationRequiredError(str(exc)) from exc
                 warnings += 1
                 logger.warning(
                     "公众号身份校验失败，保留原信息 %s：%s", account.name, exc
@@ -665,7 +803,7 @@ class ManagedService:
             time.sleep(0.5)
         raise RuntimeError("wechat-mp-tools 启动超时")
 
-    def ensure_login(self) -> None:
+    def ensure_login(self, *, force: bool = False, on_qr: Callable[[Path], None] | None = None) -> None:
         ensure_wechat_login(
             self.api,
             self.logger,
@@ -675,6 +813,8 @@ class ManagedService:
             LEGACY_WECHAT_AUTH_PATH,
             WECHAT_AUTH_PATH,
             AUTH_WAIT_SECONDS,
+            force=force,
+            on_qr=on_qr,
         )
 
     def close(self) -> None:
@@ -705,7 +845,11 @@ def fetch_history_page(api: LocalAPI, fakeid: str, begin: int) -> list[dict]:
     path = f"/api/articles/list/{quote(fakeid, safe='')}?begin={begin}&count={PAGE_SIZE}"
     payload = api.request("GET", path, timeout=120)
     articles = payload.get("articles") or []
-    return sorted(articles, key=lambda item: int(item.get("update_time") or 0), reverse=True)
+    return sorted(
+        articles,
+        key=lambda item: timestamp_seconds(item.get("update_time") or item.get("publish_time")) or 0,
+        reverse=True,
+    )
 
 
 def retry(operation, attempts: int = 3):
@@ -786,11 +930,8 @@ def publication_timestamp(primary: dict, history: dict, article_dir: Path) -> in
         values.append(read_json(article_dir / name).get("publish_time"))
     values.extend((history.get("update_time"), time.time()))
     for value in values:
-        try:
-            timestamp = int(value)
-        except (TypeError, ValueError):
-            continue
-        if timestamp > 0:
+        timestamp = timestamp_seconds(value)
+        if timestamp is not None:
             return timestamp
     return int(time.time())
 
@@ -805,20 +946,51 @@ def final_destination(account_dir: Path, timestamp: int, title: str, url: str) -
     return destination
 
 
-def existing_article_keys(account_dir: Path) -> set[str]:
-    keys: set[str] = set()
+def existing_article_index(account_dir: Path) -> dict[str, ExistingArticle]:
+    articles: dict[str, ExistingArticle] = {}
     if not account_dir.is_dir():
-        return keys
+        return articles
     for article_dir in account_dir.iterdir():
         if not article_dir.is_dir():
             continue
         for metadata_name in ("data.json", "metadata.json", "fallback_metadata.json"):
-            url = str(read_json(article_dir / metadata_name).get("url") or "")
+            metadata = read_json(article_dir / metadata_name)
+            url = str(metadata.get("url") or "")
             key = article_url_key(url)
             if key:
-                keys.add(key)
+                articles[key] = ExistingArticle(
+                    key=key,
+                    title=unescape(str(metadata.get("title") or "")).strip(),
+                    publish_time=timestamp_seconds(metadata.get("publish_time")) or 0,
+                    path=article_dir,
+                )
                 break
-    return keys
+    return articles
+
+
+def existing_article_keys(account_dir: Path) -> set[str]:
+    return set(existing_article_index(account_dir))
+
+
+def article_publish_datetime(
+    article: dict,
+    existing_article: ExistingArticle | None,
+    logger: logging.Logger | None = None,
+) -> datetime | None:
+    for value in (
+        article.get("publish_time"),
+        article.get("update_time"),
+        existing_article.publish_time if existing_article is not None else None,
+    ):
+        published_at = publish_datetime(value)
+        if published_at is not None:
+            return published_at
+    if logger is None:
+        return None
+    url = normalize_article_url(article.get("link") or article.get("url") or "")
+    if not url:
+        return None
+    return publish_datetime(source_publication_timestamp(url, logger))
 
 
 def fetch_nonempty_history_page(api: LocalAPI, fakeid: str, begin: int) -> list[dict]:
@@ -838,13 +1010,23 @@ def collect_history_candidates(
     fakeid: str,
     config: CrawlConfig,
     existing_keys: set[str],
+    existing_articles: dict[str, ExistingArticle],
     logger: logging.Logger,
+    now: datetime | None = None,
 ) -> list[tuple[str, str, dict]]:
     candidates: list[tuple[str, str, dict]] = []
     seen_keys: set[str] = set()
     begin = 0
     empty_pages = 0
     considered = 0
+    incremental_cutoff = None
+    if config.mode == "incremental":
+        current_time = now or datetime.now(LOCAL_TIMEZONE)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=LOCAL_TIMEZONE)
+        else:
+            current_time = current_time.astimezone(LOCAL_TIMEZONE)
+        incremental_cutoff = current_time - timedelta(days=config.incremental_max_days)
 
     while True:
         articles = fetch_nonempty_history_page(api, fakeid, begin)
@@ -860,6 +1042,27 @@ def collect_history_candidates(
                 continue
             seen_keys.add(key)
             fresh_on_page += 1
+
+            if incremental_cutoff is not None:
+                published_at = article_publish_datetime(
+                    article,
+                    existing_articles.get(key),
+                    logger,
+                )
+                if published_at is None:
+                    logger.info(
+                        "文章时间无法确认，跳过本篇并继续回溯（最大回溯范围 %d 天）",
+                        config.incremental_max_days,
+                    )
+                    continue
+                if published_at < incremental_cutoff:
+                    logger.info(
+                        "文章发布时间 %s 早于回溯边界 %s（%d 天），停止继续回溯",
+                        published_at.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                        incremental_cutoff.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                        config.incremental_max_days,
+                    )
+                    return candidates
 
             if config.mode == "incremental" and existing_keys:
                 if key in existing_keys:
@@ -926,10 +1129,11 @@ def crawl_account(
 ) -> int:
     label = account.label
     account_dir = reconcile_account_directory(account)
-    existing_keys = existing_article_keys(account_dir)
+    existing_articles = existing_article_index(account_dir)
+    existing_keys = set(existing_articles)
     logger.info("公众号 %s 已有 %d 篇可按 URL 识别的文章", account.name, len(existing_keys))
     history_candidates = collect_history_candidates(
-        api, account.mp_id, config, existing_keys, logger
+        api, account.mp_id, config, existing_keys, existing_articles, logger
     )
     candidates = combine_article_candidates(
         explicit_urls, history_candidates, existing_keys
@@ -1034,7 +1238,9 @@ def execute(
     service = ManagedService(api, logger, tools_log_dir)
     try:
         service.start()
-        service.ensure_login()
+        service.ensure_login(
+            on_qr=lambda path: send_login_qr(path, logger.info),
+        )
         discovered_by_mp_id: dict[str, dict] = {}
         explicit_urls_by_mp_id: dict[str, list[str]] = {}
         resolved_by_url: dict[str, dict] = {}
@@ -1164,7 +1370,8 @@ def main() -> None:
             else:
                 detail = (
                     "增量模式，已有公众号抓取断点后的新文章，"
-                    f"新公众号检查最新 {config.articles_per_account} 篇"
+                    f"新公众号检查最新 {config.articles_per_account} 篇，"
+                    f"最多回溯 {config.incremental_max_days} 天"
                 )
             logger.info(
                 "检查通过：输入文件发现 %d 个公众号文章链接；注册表已有 %d 个公众号；%s",

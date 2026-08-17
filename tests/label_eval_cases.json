@@ -1,0 +1,65 @@
+{
+  "description": "Text-only evaluation set for the label-wechat-articles skill. This file intentionally contains no expected labels.",
+  "articles": [
+    {
+      "case_id": "case-01",
+      "title": "国家人工智能应用中试基地（具身智能）首批“揭榜挂帅”课题申报启动！",
+      "url": "https://mp.weixin.qq.com/s/cKI6DidKecI60SsElRyfOQ",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/32_MP_WXS_3634249601_具身智能中试基地/2026_08_10_19_03_12_国家人工智能应用中试基地（具身智能）首批“揭榜挂帅”课题申报启动！"
+    },
+    {
+      "case_id": "case-02",
+      "title": "2026年商业航天卫星应用创新储备课题征集开始了",
+      "url": "https://mp.weixin.qq.com/s/Lp9V4DFO1LI0DveConbpPg",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/14_MP_WXS_2396792233_创新创业中关村/2026_08_06_12_41_21_2026年商业航天卫星应用创新储备课题征集开始了"
+    },
+    {
+      "case_id": "case-03",
+      "title": "2026年工信领域创新揭榜挂帅全面启动",
+      "url": "https://mp.weixin.qq.com/s/Y8hWsb41BM7gPhtNJUOCjw",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/33_MP_WXS_3191478590_物理AI智库/2026_07_31_14_40_57_2026年工信领域创新揭榜挂帅全面启动"
+    },
+    {
+      "case_id": "case-04",
+      "title": "中国信通院顺利召开国标《区块链和分布式记账技术 工业互联网和区块链融合应用指南》第二次起草研讨会",
+      "url": "https://mp.weixin.qq.com/s/bmI2irx5eABqTA1kLriLRg",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/33_MP_WXS_3191478590_物理AI智库/2026_07_15_16_34_44_中国信通院顺利召开国标《区块链和分布式记账技术 工业互联网和区块链融合应用指南》第二次起草研讨会"
+    },
+    {
+      "case_id": "case-05",
+      "title": "2026智源大会议程公开丨具身智能与人形机器人论坛",
+      "url": "https://mp.weixin.qq.com/s/2AvTU18DMXLGUQTJEqW6GQ",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/19_MP_WXS_3260713438_智源研究院/2026_06_02_12_04_15_2026智源大会议程公开丨具身智能与人形机器人论坛"
+    },
+    {
+      "case_id": "case-06",
+      "title": "产融结合·产研结合——共话具身智能发展大会成功举办",
+      "url": "https://mp.weixin.qq.com/s/LlRBZiAAHtFL1oo5u0Ox6A",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/32_MP_WXS_3634249601_具身智能中试基地/2026_05_15_23_00_51_产融结合·产研结合——共话具身智能发展大会成功举办"
+    },
+    {
+      "case_id": "case-07",
+      "title": "2026年智能工厂全新评估标准解读及要点分析",
+      "url": "https://mp.weixin.qq.com/s/WGkgsgpD4p2_q_mxU9rqmA",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/33_MP_WXS_3191478590_物理AI智库/2026_07_27_17_58_19_2026年智能工厂全新评估标准解读及要点分析"
+    },
+    {
+      "case_id": "case-08",
+      "title": "为超节点建“立体路”，上海AI实验室发布面向科学智能新算力架构DeepLink Fabric _ WAIC 2026",
+      "url": "https://mp.weixin.qq.com/s/9hHe68ViGmiriYZYuVmy-w",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/20_MP_WXS_3937224881_上海人工智能实验室/2026_07_23_19_09_22_为超节点建“立体路”，上海AI实验室发布面向科学智能新算力架构DeepLink Fabric _ WAIC 2026"
+    },
+    {
+      "case_id": "case-09",
+      "title": "习近平出席2026世界人工智能大会暨人工智能全球治理高级别会议开幕式并发表主旨讲话",
+      "url": "https://mp.weixin.qq.com/s/N9HZj5RTjWRXDwKSNnQ8eA",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/33_MP_WXS_3191478590_物理AI智库/2026_07_18_10_03_35_习近平出席2026世界人工智能大会暨人工智能全球治理高级别会议开幕式并发表主旨讲话"
+    },
+    {
+      "case_id": "case-10",
+      "title": "京企健达九州完成数亿元人民币A轮融资，推进脑疾病的精准疗法加速上市",
+      "url": "https://mp.weixin.qq.com/s/1fDvCG_6TvVKLwSzJrdd0g",
+      "article_dir": "/root/workspace/wx-crawl/results/articles/14_MP_WXS_2396792233_创新创业中关村/2026_07_30_17_14_48_京企健达九州完成数亿元人民币A轮融资，推进脑疾病的精准疗法加速上市"
+    }
+  ]
+}
