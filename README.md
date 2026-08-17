@@ -169,6 +169,22 @@ The two crawl jobs must show `Mode: no-agent`. Do not add an equivalent Agent-mo
 job, because that would duplicate the schedule and reintroduce model calls and
 Agent-side polling.
 
+The 22:00 downstream job runs one deterministic pending-batch command for V2 labeling,
+selection, database import, cleanup, and AI-table synchronization. If the 20:00 crawl
+is still active, that command waits on the crawler lock before enumerating batches, so
+the newly finalized run is included without Agent-side polling.
+If individual labels fail, Python retries only the unresolved articles once because
+valid v2 labels are skipped. A batch that still fails remains pending for the next run,
+while later independent batches continue through selection and import.
+
+The downstream program sends one compact DingTalk report after each completed high-level
+stage: labeling, selection/report generation, and database/AI-table synchronization.
+It does not send progress for individual articles, batches, or retries. These are direct
+Python webhook calls, so their contents are not appended to the Hermes Agent conversation
+and do not consume model context. A notification delivery error is written to the pipeline
+execution details without interrupting article processing. The crawl itself continues to
+send its own single completion report from the independent no-agent task.
+
 On a fresh machine, copy `install/hermes/wx_crawl_no_agent.sh` to
 `~/.hermes/scripts/`, make it executable, create or convert the 12:05 and 20:00 jobs
 with `--script wx_crawl_no_agent.sh --no-agent`, and set Hermes
@@ -241,7 +257,7 @@ multi-stage orchestration.
 
 ### Notes
 
-- On the first authenticated run, or after credentials expire, the crawler sends the QR image directly to the configured DingTalk group and also records its temporary path under the current run's `tools-log` directory. Scan it with WeChat within five minutes. The QR image is removed afterward, while credentials are stored locally for reuse.
+- On the first authenticated run, or after credentials expire, the crawler sends the QR image directly to the configured DingTalk group and also records its temporary path under the current run's `tools-log` directory. Scan it with WeChat within five minutes. If the upstream status endpoint initially accepts a stale credential but a real account or history request rejects it, the crawler detects that response, forces a fresh QR login, and retries the interrupted operation once. The QR image is removed afterward, while credentials are stored locally for reuse.
 - One authentication is used for the history backend; a separate scan is not required for every Official Account.
 - Expired or invalid credentials may cause a later run to request a new scan.
 - Newly discovered accounts are added to `account_sources.csv`. Every registered account name is revalidated on each run; stable account IDs are retained if an identity check is inconsistent.
@@ -414,7 +430,7 @@ Consequently, a fresh clone can inherit the same account registry but has no loc
 - Read the exact QR path printed in the terminal and open the PNG before the five-minute timeout.
 - Confirm the login in the WeChat app after scanning.
 - Check the current run's `tools-log/wechat-mp-tools.log` and `tools-log/crawler.log`.
-- If credentials have expired or a live request returns an authentication error, start a new run so the invalid account can be replaced through a fresh scan.
+- If credentials have expired or a live request returns an authentication error, keep the current run active and scan the replacement QR sent to DingTalk; the crawler retries automatically after login.
 
 ### The fallback browser fails
 

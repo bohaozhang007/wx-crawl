@@ -24,7 +24,7 @@ if "lxml" not in sys.modules:
         sys.modules["lxml.html"] = html_module
 
 from src.crawler import cli
-from src.auth.dingtalk_notify import crawl_status_message
+from src.auth.dingtalk_notify import crawl_status_message, pipeline_stage_message
 from scripts.run_no_agent_crawl import delivery_message, last_json_object
 
 
@@ -42,6 +42,54 @@ class AuthenticationGateTest(unittest.TestCase):
         account = cli.RegisteredAccount(1, "mp1", "测试号", "https://mp.weixin.qq.com/s/x")
         with self.assertRaises(cli.AuthenticationRequiredError):
             cli.refresh_registered_accounts(api, [account], {}, logging.getLogger("test"))
+
+    def test_real_request_auth_failure_forces_qr_login_then_retries(self):
+        operation = Mock(side_effect=[
+            RuntimeError("账号池中无可用账号，请先在『账号池』页面添加/登录账号"),
+            {"fakeid": "mp1"},
+        ])
+        service = Mock()
+
+        result = cli.run_with_auth_recovery(
+            operation,
+            service,
+            logging.getLogger("test"),
+            "解析输入文章链接",
+        )
+
+        self.assertEqual(result, {"fakeid": "mp1"})
+        self.assertEqual(operation.call_count, 2)
+        service.ensure_login.assert_called_once()
+        self.assertTrue(service.ensure_login.call_args.kwargs["force"])
+
+    def test_non_auth_failure_does_not_request_qr_login(self):
+        operation = Mock(side_effect=RuntimeError("网络请求超时"))
+        service = Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "网络请求超时"):
+            cli.run_with_auth_recovery(
+                operation,
+                service,
+                logging.getLogger("test"),
+                "解析输入文章链接",
+            )
+
+        service.ensure_login.assert_not_called()
+
+    def test_second_auth_failure_is_explicit(self):
+        operation = Mock(side_effect=[
+            RuntimeError("账号池中无可用账号"),
+            RuntimeError("暂无可用微信读书账号"),
+        ])
+        service = Mock()
+
+        with self.assertRaises(cli.AuthenticationRequiredError):
+            cli.run_with_auth_recovery(
+                operation,
+                service,
+                logging.getLogger("test"),
+                "校验公众号身份",
+            )
 
 
 class NoAgentNotificationTest(unittest.TestCase):
@@ -89,6 +137,44 @@ class NoAgentNotificationTest(unittest.TestCase):
         notify.assert_called_once()
         emit.assert_called_once()
         self.assertEqual(payload["notification"], "sent")
+
+    def test_pipeline_stage_messages_are_compact_aggregates(self):
+        label = pipeline_stage_message(
+            "label",
+            {
+                "batch_count": 4,
+                "article_count": 156,
+                "labeled_count": 156,
+                "retry_article_count": 2,
+                "failed_batch_count": 0,
+                "duration_seconds": 600,
+            },
+        )
+        select = pipeline_stage_message(
+            "select",
+            {"keep_count": 3, "drop_count": 150, "review_count": 3},
+        )
+        storage = pipeline_stage_message(
+            "storage",
+            {
+                "completed_batch_count": 4,
+                "article_count": 3,
+                "db_inserted": 3,
+                "sync_inserted": 3,
+            },
+        )
+        self.assertIn("打标阶段完成", label)
+        self.assertIn("重试文章：2 篇", label)
+        self.assertIn("筛选与报告阶段完成", select)
+        self.assertIn("KEEP：3 篇", select)
+        self.assertIn("数据库新增/更新：3/0", storage)
+
+    def test_pipeline_stage_warning_when_a_batch_failed(self):
+        message = pipeline_stage_message(
+            "label", {"failed_batch_count": 1, "duration_seconds": 1}
+        )
+        self.assertTrue(message.startswith("⚠️"))
+        self.assertIn("失败批次：1 个", message)
 
 
 class IncrementalLookbackTest(unittest.TestCase):

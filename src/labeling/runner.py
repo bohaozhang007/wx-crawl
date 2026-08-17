@@ -198,7 +198,10 @@ def validate_model_label(payload: dict[str, Any], article: ArticleInput) -> list
             continue
         text = evidence.get("text")
         if isinstance(text, str) and _normalize_evidence(text) not in source:
-            errors.append(f"evidence[{index}].text is not present in the article")
+            errors.append(
+                f"evidence[{index}].text is not present in the article; "
+                "copy a shorter verbatim substring instead of paraphrasing"
+            )
     return errors
 
 

@@ -65,8 +65,8 @@ def send_login_qr(qr_path: Path, logger: Callable[[str], None] = lambda _: None)
 def send_auth_status(status: str, detail: str = "") -> None:
     messages = {
         "success": "✅ 微信读书登录成功，凭证已恢复，正在继续微信公众号爬取。",
-        "timeout": "⏱️ 微信读书登录等待 5 分钟超时，本轮跳过爬取阶段，继续处理后续存量批次。",
-        "qr_error": "❌ 微信读书二维码发送失败，本轮跳过爬取阶段，继续处理后续存量批次。",
+        "timeout": "⏱️ 微信读书登录等待 5 分钟超时，本次微信公众号爬取无法继续。",
+        "qr_error": "❌ 微信读书二维码发送失败，本次微信公众号爬取无法继续。",
     }
     message = messages.get(status, f"微信公众号认证状态更新：{status}")
     if detail: message += f"\n详情：{detail}"
@@ -97,3 +97,47 @@ def crawl_status_message(payload: dict[str, object]) -> str:
 
 def send_crawl_status(payload: dict[str, object]) -> None:
     _send_text(crawl_status_message(payload))
+
+
+def pipeline_stage_message(stage: str, payload: dict[str, object]) -> str:
+    """Build one compact notification for a completed high-level pipeline stage."""
+    duration = float(payload.get("duration_seconds") or 0) / 60
+    failed = int(payload.get("failed_batch_count") or 0)
+    marker = "⚠️" if failed else "✅"
+    if stage == "label":
+        return (
+            f"{marker} 微信公众号流水线：打标阶段完成"
+            f"\n批次：{int(payload.get('batch_count') or 0)} 个"
+            f"\n文章记录：{int(payload.get('article_count') or 0)} 篇"
+            f"\n新生成标签：{int(payload.get('labeled_count') or 0)} 篇"
+            f"\n重试文章：{int(payload.get('retry_article_count') or 0)} 篇"
+            f"\n失败批次：{int(payload.get('failed_batch_count') or 0)} 个"
+            f"\n耗时：{duration:.1f} 分钟"
+        )
+    if stage == "select":
+        return (
+            f"{marker} 微信公众号流水线：筛选与报告阶段完成"
+            f"\nKEEP：{int(payload.get('keep_count') or 0)} 篇"
+            f"\nDROP：{int(payload.get('drop_count') or 0)} 篇"
+            f"\nREVIEW：{int(payload.get('review_count') or 0)} 篇"
+            f"\n失败批次：{int(payload.get('failed_batch_count') or 0)} 个"
+            f"\n耗时：{duration:.1f} 分钟"
+        )
+    if stage == "storage":
+        return (
+            f"{marker} 微信公众号流水线：入库与同步阶段完成"
+            f"\n完成批次：{int(payload.get('completed_batch_count') or 0)} 个"
+            f"\n失败批次：{int(payload.get('failed_batch_count') or 0)} 个"
+            f"\n筛选入库文章：{int(payload.get('article_count') or 0)} 篇"
+            f"\n数据库新增/更新：{int(payload.get('db_inserted') or 0)}/"
+            f"{int(payload.get('db_updated') or 0)}"
+            f"\nAI表新增/更新/未变化：{int(payload.get('sync_inserted') or 0)}/"
+            f"{int(payload.get('sync_updated') or 0)}/"
+            f"{int(payload.get('sync_unchanged') or 0)}"
+            f"\n耗时：{duration:.1f} 分钟"
+        )
+    raise ValueError(f"unknown pipeline stage: {stage}")
+
+
+def send_pipeline_stage(stage: str, payload: dict[str, object]) -> None:
+    _send_text(pipeline_stage_message(stage, payload))

@@ -46,7 +46,10 @@ into the Agent when a summary and `details_file` are sufficient.
    Hermes no-agent crawl job produces the input batch independently.
 
 2. Enumerate every valid incomplete batch oldest first. Skip batches covered by
-   `pipeline_coverage.json` or completed by a valid `pipeline_state.json`.
+   `pipeline_coverage.json` or completed by a valid `pipeline_state.json`. The
+   deterministic pending-batch script first waits on `results/record/.crawler.lock`
+   for an active crawl to finish and settle its final CSV files; do not add Agent-side
+   polling or enumerate batches before that wait.
 
 3. Label one batch with a single Python process:
 
@@ -61,6 +64,10 @@ into the Agent when a summary and `details_file` are sufficient.
    Require exit code zero and JSON `failed=0`. Existing v2 labels with summaries are
    skipped; summary-less v2 labels are upgraded in the same model call. Delete v1
    labels rather than attempting to promote them.
+   The pending-batch program makes one additional process-level labeling attempt when
+   any articles fail; the second invocation skips valid labels and calls the model only
+   for unresolved articles. If failures remain, leave that batch pending, continue all
+   later batches, and retry the pending batch on the next pipeline run.
    Never replace this command with the old per-article `inventory`/`write` Agent loop.
    Never proceed while selector `status` reports `pending_label_count > 0`.
    Read `labeling_result.json` only when the compact counts indicate a failure or
@@ -103,6 +110,14 @@ into the Agent when a summary and `details_file` are sufficient.
 8. Write `pipeline_state.json` as completed only after every required stage and
    AI-table readback succeeds.
 
+The scheduled pending-batch program sends exactly one aggregate DingTalk notification
+after each high-level downstream stage finishes: labeling, selection/reporting, and
+database/AI-table synchronization. It never sends article-, batch-, or retry-level
+progress messages. These notifications are direct Python webhook calls and do not enter
+the Hermes Agent context. A notification delivery failure is recorded in the execution
+details but does not fail or retry the data pipeline. The Agent must not duplicate these
+stage notifications; it reports only the final compact execution JSON.
+
 ## Individual stages
 
 When the user requests only one stage, run only that stage and its required read-only
@@ -120,7 +135,8 @@ Do not expand a partial-stage request into destructive cleanup or unrelated exte
 
 - Authentication or crawl failure blocks only the new crawl batch; a scheduled catch-up
   job may still process previously completed crawl batches.
-- Label, selector, report, or database failure leaves the batch pending and preserves files.
+- Label, selector, report, or database failure leaves that batch pending and preserves
+  files; it must not prevent later independent batches from running.
 - Use URL/idempotency keys for retries; do not infer completion from an Agent narrative.
 - A successful report includes run IDs, labeling counts, pending/review/selected counts,
   ledger path and count, database results, cleanup results, and sync/readback results.

@@ -37,9 +37,12 @@ poll its subprocess from the Agent, or re-check output files after `status=ok`.
 
 Authentication is program-owned. The crawler starts `wechat-mp-tools`, reuses saved
 credentials when valid, and otherwise sends one QR image to the configured DingTalk
-group, waits up to five minutes for a scan, then continues automatically. It sends
-login and terminal status notifications and closes any service it started. Never ask
-for cookies or tokens and never send a second QR from the Agent.
+group, waits up to five minutes for a scan, then continues automatically. Because the
+upstream status endpoint can temporarily accept a stale token, the crawler also treats
+an authentication error from a real account/history request as expired credentials:
+it forces a fresh QR login and retries that operation once. It sends login and terminal
+status notifications and closes any service it started. Never ask for cookies or tokens
+and never send a second QR from the Agent.
 
 ## Scheduling
 

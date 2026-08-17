@@ -109,11 +109,12 @@ to an Agent cron prompt. If a nightly Hermes job is needed for downstream proces
 make it invoke the deterministic pending-batch entry point once:
 
 ```text
-cronjob(action="create", schedule="0 22 * * *", name="wechat-article-label-filter-export-pipeline", skills=["wechat-pipeline-orchestration"], workdir="/root/workspace/wx-crawl", enabled_toolsets=["terminal"], prompt="Do not authenticate or crawl. Run /root/workspace/wx-crawl/.venv/bin/python /root/workspace/wx-crawl/skill/wechat-pipeline-orchestration/scripts/process_pending_batches.py exactly once, wait for completion, and report only its compact JSON summary or terminal error.")
+cronjob(action="create", schedule="0 22 * * *", name="wechat-article-label-filter-export-pipeline", skills=["wechat-pipeline-orchestration"], workdir="/root/workspace/wx-crawl", enabled_toolsets=["terminal"], prompt="Do not authenticate or crawl. Run /root/workspace/wx-crawl/.venv/bin/python /root/workspace/wx-crawl/skill/wechat-pipeline-orchestration/scripts/process_pending_batches.py exactly once, wait for completion, and report its compact JSON including processed_count, failed_batch_count, notification_failed_count, selected_count, and details_file. The Python program retries unresolved labels, isolates batch failures, and sends one direct DingTalk aggregate after labeling, selection/reporting, and storage/sync. Do not retry or duplicate stage notifications from the Agent.")
 ```
 
 The Python entry point owns labeling, deterministic selection, report generation,
-database import/prune, and sync. Do not repeat those stages in the Agent.
+database import/prune, sync, and direct stage notifications. Do not repeat those stages
+or notifications in the Agent.
 
 ## Verification
 

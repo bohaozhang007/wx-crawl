@@ -939,6 +939,32 @@ def retry(operation, attempts: int = 3):
     raise error
 
 
+def run_with_auth_recovery(
+    operation,
+    service: ManagedService,
+    logger: logging.Logger,
+    context: str,
+):
+    """Retry one API operation after a real request rejects stale credentials."""
+    try:
+        return operation()
+    except Exception as exc:
+        if not isinstance(exc, AuthenticationRequiredError) and not is_authentication_error(str(exc)):
+            raise
+        logger.warning("%s 时发现认证已失效，正在发送新二维码", context)
+        service.ensure_login(
+            force=True,
+            on_qr=lambda path: send_login_qr(path, logger.info),
+        )
+        logger.info("重新认证成功，继续%s", context)
+        try:
+            return operation()
+        except Exception as retry_exc:
+            if isinstance(retry_exc, AuthenticationRequiredError) or is_authentication_error(str(retry_exc)):
+                raise AuthenticationRequiredError(str(retry_exc)) from retry_exc
+            raise
+
+
 def primary_download(url: str, title: str, work_parent: Path) -> tuple[dict, Path]:
     if str(MP_PROJECT) not in sys.path:
         sys.path.insert(0, str(MP_PROJECT))
@@ -1328,8 +1354,15 @@ def execute(
         for index, seed_url in enumerate(seed_urls, start=1):
             logger.info("解析输入文章链接 [%d/%d]", index, len(seed_urls))
             try:
-                resolved = retry(lambda: resolve_account(api, seed_url))
+                resolved = run_with_auth_recovery(
+                    lambda: retry(lambda: resolve_account(api, seed_url)),
+                    service,
+                    logger,
+                    "解析输入文章链接",
+                )
             except Exception as exc:
+                if isinstance(exc, AuthenticationRequiredError) or is_authentication_error(str(exc)):
+                    raise AuthenticationRequiredError(str(exc)) from exc
                 logger.error("输入文章链接无法解析，跳过 %s：%s", seed_url, exc)
                 continue
             mp_id = str(resolved.get("fakeid") or "").strip()
@@ -1345,8 +1378,13 @@ def execute(
         )
         if not registry:
             raise RuntimeError("没有可处理的公众号：输入链接均未成功解析，注册表也为空")
-        verified, renamed, validation_warnings = refresh_registered_accounts(
-            api, registry, resolved_by_url, logger
+        verified, renamed, validation_warnings = run_with_auth_recovery(
+            lambda: refresh_registered_accounts(
+                api, registry, resolved_by_url, logger
+            ),
+            service,
+            logger,
+            "校验公众号身份",
         )
         save_registry(registry)
         update_global_summary(registry)
@@ -1370,18 +1408,26 @@ def execute(
             try:
                 explicit_urls = [account.sample_url]
                 explicit_urls.extend(explicit_urls_by_mp_id.get(account.mp_id, []))
-                crawl_account(
-                    api,
-                    account,
-                    work_root,
-                    config,
-                    timing,
+                run_with_auth_recovery(
+                    lambda: crawl_account(
+                        api,
+                        account,
+                        work_root,
+                        config,
+                        timing,
+                        logger,
+                        tools_log_dir,
+                        explicit_urls,
+                    ),
+                    service,
                     logger,
-                    tools_log_dir,
-                    explicit_urls,
+                    f"处理公众号 {account.name}",
                 )
                 timing.finish("成功")
             except Exception as exc:
+                if isinstance(exc, AuthenticationRequiredError) or is_authentication_error(str(exc)):
+                    timing.finish("认证失败")
+                    raise AuthenticationRequiredError(str(exc)) from exc
                 logger.error("公众号处理失败 %s：%s", account.name, exc)
                 timing.finish("处理失败")
                 incomplete_accounts.append(account.name)
