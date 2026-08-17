@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 from src.storage import db
 
@@ -81,7 +83,20 @@ class StorageTest(unittest.TestCase):
             db.import_report(self.report, self.database)
         self.assertFalse(self.database.exists())
 
+    def test_selector_compact_summary_resolves_details_file(self) -> None:
+        details = Path(self.temp_dir.name) / "selector_details.json"
+        details.write_text(
+            json.dumps({"articles": [{"article_dir": str(self.article)}]}),
+            encoding="utf-8",
+        )
+        summary = json.dumps({"status": "ok", "details_file": str(details)})
+        with patch(
+            "src.storage.db.subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=0, stdout=summary, stderr=""),
+        ):
+            payload = db.run_selector(Path(self.temp_dir.name), "candidates")
+        self.assertEqual(payload["articles"][0]["article_dir"], str(self.article))
+
 
 if __name__ == "__main__":
     unittest.main()
-

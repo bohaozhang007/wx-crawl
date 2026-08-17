@@ -29,7 +29,7 @@ LOG_PATH_NAME = "article_label_export.log"
 LOGGER = logging.getLogger("article-label-export")
 
 
-def setup_logging(run_dir: Path) -> None:
+def setup_logging(run_dir: Path, verbose: bool = False) -> None:
     LOGGER.setLevel(logging.INFO)
     for handler in LOGGER.handlers:
         handler.close()
@@ -37,9 +37,10 @@ def setup_logging(run_dir: Path) -> None:
     LOGGER.propagate = False
 
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(formatter)
-    LOGGER.addHandler(console)
+    if verbose:
+        console = logging.StreamHandler(sys.stderr)
+        console.setFormatter(formatter)
+        LOGGER.addHandler(console)
 
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +233,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
             "decision_path": list(label["decision_path"]) if label else None,
             "reason_code": label["reason_code"] if label else None,
             "reason": label["reason"] if label else reason,
+            "summary": label.get("summary") if label else None,
             "evidence": list(label["evidence"]) if label else None,
         }
         if reason:
@@ -275,6 +277,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
                 "decision_path": label["decision_path"],
                 "reason_code": label["reason_code"],
                 "reason": label["reason"],
+                "summary": label.get("summary", ""),
                 "evidence": label["evidence"],
                 "application_type": label["application_type"],
                 "domains": label["domains"],
@@ -357,15 +360,19 @@ def load_summaries(path: Path) -> dict[str, str]:
     return summaries
 
 
-def write_report(run_dir: Path, summaries_path: Path, output_path: Path) -> None:
+def write_report(run_dir: Path, summaries_path: Path | None, output_path: Path) -> None:
     LOGGER.info("开始生成筛选报告 run_dir=%s summaries=%s output=%s", run_dir, summaries_path, output_path)
     selected = select_matches(run_dir)
-    summaries = load_summaries(summaries_path)
+    default_summaries_path = run_dir / "article_summaries.json"
+    fallback_path = summaries_path or (default_summaries_path if default_summaries_path.is_file() else None)
+    summaries = load_summaries(fallback_path) if fallback_path is not None else {}
     articles: list[dict[str, Any]] = []
+    normalized_summaries: dict[str, str] = {}
     missing: list[str] = []
     for index, article in enumerate(selected["articles"], start=1):
         summary = (
-            summaries.get(article["url"])
+            str(article.get("summary") or "").strip()
+            or summaries.get(article["url"])
             or summaries.get(article["article_dir"])
             or summaries.get(article["title"])
         )
@@ -374,10 +381,12 @@ def write_report(run_dir: Path, summaries_path: Path, output_path: Path) -> None
             LOGGER.warning("报告文章 [%d/%d] 缺少摘要 title=%s", index, len(selected["articles"]), article["title"])
             continue
         articles.append({**article, "summary": summary})
+        normalized_summaries[article["url"]] = summary
         LOGGER.info("报告文章 [%d/%d] 已加入 title=%s", index, len(selected["articles"]), article["title"])
     if missing:
         LOGGER.error("筛选报告生成失败 missing_summaries=%d", len(missing))
         raise SystemExit("missing summaries for: " + "；".join(missing))
+    write_json_atomic(normalized_summaries, default_summaries_path)
     try:
         output_path = output_path.resolve()
         output_path.relative_to(run_dir.resolve())
@@ -429,7 +438,8 @@ def processing_status(run_dir: Path) -> dict[str, Any]:
         label, label_error = valid_label(article_dir)
         is_selected = candidate["article_dir"] in selected_paths
         has_summary = bool(
-            summaries.get(candidate["url"])
+            (label or {}).get("summary")
+            or summaries.get(candidate["url"])
             or summaries.get(candidate["article_dir"])
             or summaries.get(candidate["title"])
         )
@@ -462,7 +472,11 @@ def processing_status(run_dir: Path) -> dict[str, Any]:
         "review_count": sum(item["state"] == "待人工复核" for item in articles),
         "selected_count": len(selected["articles"]),
         "summary_file": str(summaries_path),
-        "summary_state": "已生成" if summaries_path.is_file() and not summaries_error else "未生成",
+        "summary_state": (
+            "已生成"
+            if not summaries_error and all(item["state"] != "待摘要" for item in articles)
+            else "未生成"
+        ),
         "summary_error": summaries_error,
         "report_file": str(report_path),
         "report_state": report_state,
@@ -504,33 +518,67 @@ def write_json_atomic(payload: dict[str, Any], output_path: Path) -> None:
     LOGGER.info("JSON 文件写入完成 output=%s", output_path)
 
 
+def emit(summary: dict[str, Any], details: dict[str, Any], verbose: bool) -> None:
+    payload = details if verbose else summary
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if verbose else None))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Select current-run articles with an explicit KEEP decision")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("candidates", "matches"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("--run-dir")
+        command_parser.add_argument("--verbose", action="store_true", help="show progress logs and detailed JSON")
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--run-dir")
     status_parser.add_argument("--output", default="processing_status.json")
+    status_parser.add_argument("--verbose", action="store_true", help="show progress logs and detailed JSON")
     report_parser = subparsers.add_parser("write-report", help="persist selected articles and agent summaries")
     report_parser.add_argument("--run-dir")
-    report_parser.add_argument("--summaries", required=True, help="JSON object keyed by URL, article_dir, or title")
+    report_parser.add_argument(
+        "--summaries",
+        help="optional legacy/fallback JSON keyed by URL, article_dir, or title",
+    )
     report_parser.add_argument("--output", default="filtered_articles.json")
+    report_parser.add_argument("--verbose", action="store_true", help="show progress logs and detailed JSON")
     args = parser.parse_args()
     run_dir = resolve_run_dir(args.run_dir)
-    setup_logging(run_dir)
+    setup_logging(run_dir, args.verbose)
     started = time.monotonic()
     LOGGER.info("开始执行 article-label-export command=%s run_dir=%s", args.command, run_dir)
     try:
         if args.command == "candidates":
             candidates, skipped = match_run_articles(run_dir)
-            print(json.dumps({"run_dir": str(run_dir), "count": len(candidates), "articles": candidates, "skipped": skipped}, ensure_ascii=False, indent=2))
+            details = {"run_dir": str(run_dir), "count": len(candidates), "articles": candidates, "skipped": skipped}
+            details_path = run_dir / "candidate_inventory.json"
+            write_json_atomic(details, details_path)
+            emit(
+                {
+                    "status": "ok", "command": "candidates", "run_dir": str(run_dir),
+                    "count": len(candidates), "skipped_count": len(skipped),
+                    "details_file": str(details_path),
+                },
+                details,
+                args.verbose,
+            )
             LOGGER.info("候选文章输出完成 count=%d skipped=%d", len(candidates), len(skipped))
             return
         if args.command == "matches":
             payload = select_matches(run_dir)
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            ledger_path = run_dir / "labeling_ledger.json"
+            ledger = read_json(ledger_path)
+            emit(
+                {
+                    "status": "ok", "command": "matches", "run_dir": str(run_dir),
+                    "count": payload["count"], "skipped_count": len(payload["skipped"]),
+                    "review_count": int(ledger.get("review", 0) or 0),
+                    "pending_count": int(ledger.get("pending", 0) or 0),
+                    "details_file": str(ledger_path),
+                },
+                payload,
+                args.verbose,
+            )
             LOGGER.info("命中文章输出完成 count=%d skipped=%d", payload["count"], len(payload["skipped"]))
             return
         if args.command == "status":
@@ -543,11 +591,35 @@ def main() -> None:
             status = processing_status(run_dir)
             status["status_file"] = str(output_path)
             write_json_atomic(status, output_path)
-            print(json.dumps(status, ensure_ascii=False, indent=2))
+            emit(
+                {
+                    "status": "ok", "command": "status", "run_dir": str(run_dir),
+                    "input_count": status["input_count"],
+                    "pending_label_count": status["pending_label_count"],
+                    "review_count": status["review_count"],
+                    "selected_count": status["selected_count"],
+                    "summary_state": status["summary_state"],
+                    "report_state": status["report_state"],
+                    "details_file": str(output_path),
+                },
+                status,
+                args.verbose,
+            )
             LOGGER.info("处理状态输出完成 output=%s", output_path)
             return
-        write_report(run_dir, Path(args.summaries), (run_dir / args.output).resolve())
-        print(json.dumps({"run_dir": str(run_dir), "output": str((run_dir / args.output).resolve())}, ensure_ascii=False, indent=2))
+        output_path = (run_dir / args.output).resolve()
+        write_report(run_dir, Path(args.summaries) if args.summaries else None, output_path)
+        details = read_json(output_path)
+        emit(
+            {
+                "status": "ok", "command": "write-report", "run_dir": str(run_dir),
+                "count": int(details.get("count", 0) or 0),
+                "skipped_count": len(details.get("skipped", [])),
+                "details_file": str(output_path),
+            },
+            details,
+            args.verbose,
+        )
     except SystemExit as exc:
         LOGGER.error("article-label-export 执行失败 command=%s run_dir=%s error=%s", args.command, run_dir, exc)
         raise

@@ -33,6 +33,7 @@ def main() -> int:
     if result.returncode == 0 and status in {"ready", "ready_after_login"}:
         from src.auth.dingtalk_notify import send_auth_status
         send_auth_status("success")
+        print(json.dumps({"status": "ok", "command": "authentication", "result": payload}, ensure_ascii=False))
         return 0
     if status == "authentication_timeout":
         from src.auth.dingtalk_notify import send_auth_status
@@ -40,7 +41,7 @@ def main() -> int:
     elif status in {"service_start_failed", "api_unavailable", "login_failed"}:
         from src.auth.dingtalk_notify import send_auth_status
         send_auth_status("qr_error", str(payload))
-    sys.stdout.write(result.stdout)
+    print(json.dumps({"status": "failed", "command": "authentication", "result": payload}, ensure_ascii=False))
     sys.stderr.write(result.stderr)
     return result.returncode or 10
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "微信公众号爬取"
-  short_description: "直接运行微信公众号爬取任务并返回需要的微信登录二维码"
-  default_prompt: "使用 $wechat-crawl 直接运行微信公众号爬取，并在需要登录时返回二维码。"
+  short_description: "运行 no-agent 公众号爬取并检查本地归档结果"
+  default_prompt: "使用 $wechat-official-account-crawler 运行一次公众号爬取或检查 no-agent 定时器。"

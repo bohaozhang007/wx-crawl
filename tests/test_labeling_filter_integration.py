@@ -44,6 +44,7 @@ class FakeKeepModel:
             ],
             "reason_code": "K1",
             "reason": "文章开放科研项目申报，任务直接要求研发多模态大模型。",
+            "summary": "文章发布大模型科研项目申报通知，并明确申报期限和多模态大模型研究任务。",
             "evidence": [
                 {"type": "solicitation", "text": "请于8月30日前提交申报材料", "location": "申报要求"},
                 {"type": "domain", "text": "研发多模态大模型训练方法", "location": "研究内容"},
@@ -103,9 +104,15 @@ class PythonLabelFilterIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 selector, "RECORD_ROOT", record_root
             ):
                 selected = selector.select_matches(run_dir)
+                report_path = run_dir / "filtered_articles.json"
+                selector.write_report(run_dir, None, report_path)
 
             self.assertEqual(selected["count"], 1)
             self.assertEqual(selected["articles"][0]["reason_code"], "K1")
+            self.assertTrue(selected["articles"][0]["summary"])
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["articles"][0]["summary"], selected["articles"][0]["summary"])
+            self.assertTrue((run_dir / "article_summaries.json").is_file())
             ledger = json.loads((run_dir / "labeling_ledger.json").read_text(encoding="utf-8"))
             self.assertEqual(ledger["entries"][0]["selection"], "selected")
             self.assertEqual(ledger["entries"][0]["domains"], ["大模型"])

@@ -13,5 +13,4 @@ else
     PY="python3"
 fi
 
-"$PY" scripts/check_wechat_auth.py
 exec "$PY" src/crawl.py "$@"

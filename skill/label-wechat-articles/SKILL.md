@@ -35,10 +35,17 @@ structured response and quoted evidence, and atomically writes `label.json`.
      --run-dir /root/workspace/wx-crawl/results/record/<timestamp>
    ```
 
-Existing valid v2 labels are skipped. Use `--replace` only when the user explicitly
-requests relabeling. Do not proceed to selection when the result reports failures.
+Existing valid v2 labels that already contain `summary` are skipped. A valid v2 label
+without `summary` is upgraded through the same model call; v1 labels are unsupported
+and must be deleted rather than migrated in place. Use `--replace` only when the user
+explicitly requests relabeling. Do not proceed to selection when the result reports failures.
 The unscoped command labels every pending archive article and must not be used by the
 pipeline orchestrator.
+
+By default stdout is one compact JSON summary. Per-article outcomes are written to
+the reported `details_file` (`labeling_result.json` for a run). Use `--verbose` only
+for a human-requested diagnosis; normal Agent orchestration must use the compact
+summary and open the details file only on failure.
 
 ## Manual review workflow
 
@@ -121,6 +128,7 @@ content. Treat `decision-tree.md` as the source of truth if examples conflict.
      --path-step K1 \
      --reason-code K1 \
      --reason "文章开放科研项目申报，并在任务要求中直接要求研发多模态大模型。" \
+     --summary "文章发布科研项目申报通知，明确申报期限、材料要求和多模态大模型研究任务。" \
      --evidence solicitation "申报要求" "申报截止时间为……" \
      --evidence domain "研究内容" "研发多模态大模型训练与推理方法" \
      --application-type "科研项目申请" \
@@ -144,6 +152,7 @@ Write exactly these v2 fields:
   "decision_path": ["E1:PASS", "O1:O1-D1"],
   "reason_code": "O1-D1",
   "reason": "文章公布的是已完成评审的拟入选名单，没有开放新的申报机会。",
+  "summary": "文章公示已完成评审的拟入选项目名单，并说明公示期限和意见反馈方式。",
   "evidence": [
     {
       "type": "negative",
@@ -155,6 +164,11 @@ Write exactly these v2 fields:
   "domains": []
 }
 ```
+
+The API-backed Python labeler must generate `summary` in the same response for every
+KEEP, DROP, or REVIEW article. Keep it factual, 1-3 sentences, normally 100-200 Chinese
+characters, and separate from the decision rationale. Existing summary-less v2 labels
+remain readable for migration, but normal batch labeling upgrades them before reporting.
 
 Use evidence types only from:
 
@@ -183,9 +197,10 @@ reinterpretation:
 Run:
 
 ```bash
+python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_articles.py purge-v1 --confirm-delete
 python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_articles.py count
 python3 /root/workspace/wx-crawl/skill/label-wechat-articles/scripts/label_articles.py validate
 ```
 
 Require zero pending labels and zero invalid labels before automatic selection. Treat
-legacy v1 labels as pending; never mechanically promote them to KEEP.
+legacy v1 labels as pending and delete them; never mechanically promote them to v2 or KEEP.

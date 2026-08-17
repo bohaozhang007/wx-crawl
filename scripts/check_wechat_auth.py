@@ -101,6 +101,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wait-seconds", type=int, default=300)
     parser.add_argument("--check-only", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="show QR and progress details on stderr")
     args = parser.parse_args()
     try:
         process = start_service()
@@ -127,13 +128,14 @@ def main() -> int:
                 qrcode.make(qrcode_url).save(tmp)
                 os.replace(tmp, QR)
                 from src.auth.dingtalk_notify import send_login_qr
-                send_login_qr(QR, lambda msg: print(msg, flush=True))
+                send_login_qr(QR, lambda msg: print(msg, flush=True, file=sys.stderr))
                 sent.add(qrcode_url)
-                print(json.dumps({"status": "qr_sent", "path": str(QR)}, ensure_ascii=False), flush=True)
+                if args.verbose:
+                    print(json.dumps({"status": "qr_sent", "path": str(QR)}, ensure_ascii=False), flush=True, file=sys.stderr)
             if status.get("logged_in"):
                 pool = api("GET", "/api/account-pool")
                 if ready(status, pool):
-                    print(json.dumps({"status": "ready_after_login", "active": True}, ensure_ascii=False))
+                    print(json.dumps({"status": "ready_after_login", "logged_in": True, "active": True}, ensure_ascii=False))
                     return 0
             if state.get("status") == "failed":
                 print(json.dumps({"status": "login_failed", "message": state.get("message", "")}, ensure_ascii=False))
@@ -141,10 +143,10 @@ def main() -> int:
         print(json.dumps({"status": "authentication_timeout", "qr_sent": bool(sent)}, ensure_ascii=False))
         return 11
     except requests.RequestException as exc:
-        print(json.dumps({"status": "api_unavailable", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"status": "api_unavailable", "error": str(exc)}, ensure_ascii=False))
         return 20
     except Exception as exc:
-        print(json.dumps({"status": "service_start_failed", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"status": "service_start_failed", "error": str(exc)}, ensure_ascii=False))
         return 21
 
 

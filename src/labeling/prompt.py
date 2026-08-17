@@ -25,6 +25,11 @@ def build_system_prompt(decision_tree: str, research_profile: str) -> str:
 可复核的具体原因和短原文证据。证据文本必须逐字来自提供的标题、元数据或正文；只有
 missing_evidence 类型可以描述缺失文件而不引用正文。
 
+同一次输出还必须生成 summary：无论最终决定是 KEEP、DROP 还是 REVIEW，都用 1 至 3 句话、
+约 100 至 200 个汉字客观概括文章本身。科研项目或指南优先概括发布主体、申报对象、研究任务、
+截止时间等正文明确给出的信息；其他文章概括其主要事实。不得把 KEEP/DROP/REVIEW 判断理由
+当作摘要，不得补充原文没有的信息。
+
 <decision_tree>
 {decision_tree}
 </decision_tree>
@@ -36,7 +41,8 @@ missing_evidence 类型可以描述缺失文件而不引用正文。
 
 
 def build_article_prompt(article_dir: Path, metadata: dict[str, Any], content: str) -> str:
-    return f"""对下面这一篇文章执行完整决策树。tree_version 必须使用决策树给出的版本。
+    return f"""对下面这一篇文章执行完整决策树，并在同一个 JSON 对象中生成 summary。
+tree_version 必须使用决策树给出的版本。
 
 <article_directory>{article_dir}</article_directory>
 <metadata>
@@ -46,4 +52,3 @@ def build_article_prompt(article_dir: Path, metadata: dict[str, Any], content: s
 {content}
 </article_content>
 """
-

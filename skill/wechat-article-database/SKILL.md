@@ -9,7 +9,7 @@ Use the repository CLI at `/root/workspace/wx-crawl/wx-crawl-db`. The database
 stores only articles with a validated v2 label whose decision is `KEEP`. The
 v2 label contract itself requires a qualifying application type, a non-empty
 task-scope domain list, a terminal reason code, reasoning, and evidence. It keeps the
-title, URL, account, publish time, labels, Agent summary, and full text. The
+title, URL, account, publish time, labels, model-generated summary, and full text. The
 database is the durable store; `results/articles/` is the crawl staging area.
 
 ## Safety Rules
@@ -26,8 +26,9 @@ database is the durable store; `results/articles/` is the crawl staging area.
 - Full-history cleanup requires valid v2 labels, protects KEEP and REVIEW, and
   considers only explicit DROP directories. DROP directories with an existing
   SQLite row or without a valid WeChat URL are retained/reported rather than deleted.
-- Keep CLI JSON output available for callers; do not wrap it in prose when an
-  Agent or webhook needs machine-readable data.
+- Keep compact CLI JSON summaries available for callers; do not wrap them in prose.
+  Detailed cleanup results are written to the returned `details_file`. Query
+  commands return full records only with explicit `--json` or `--verbose`.
 
 ## Initialize
 
@@ -44,9 +45,9 @@ The default path is `/root/workspace/wx-crawl/results/articles.sqlite3`. Use
 
 Require a completed crawl and a valid run directory containing
 `filtered_articles.json`. If the report has not been generated, first use the
-`article-label-export` skill to read article text, create
-`article_summaries.json`, and run its `write-report` command. Do not invent a
-summary or bypass the label validation.
+`article-label-export` skill to run `write-report`; it reads summaries already generated
+inside v2 labels and materializes `article_summaries.json`. Do not ask the Agent to
+summarize again or bypass label validation.
 
 Import idempotently by URL:
 

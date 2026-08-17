@@ -5,7 +5,7 @@ from typing import Literal, Protocol
 
 import httpx
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .config import LabelingConfig
 
@@ -27,6 +27,7 @@ class LabelOutput(BaseModel):
     decision_path: list[str]
     reason_code: str
     reason: str
+    summary: str = Field(min_length=1, max_length=500)
     evidence: list[EvidenceOutput]
     application_type: Literal["科研项目申请", "科研指南申请", "都不是"]
     domains: list[Literal["无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂"]]

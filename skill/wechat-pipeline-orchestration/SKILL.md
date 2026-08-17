@@ -5,52 +5,50 @@ description: Orchestrate or resume the WeChat article pipeline, including authen
 
 # WeChat Pipeline Orchestration
 
-Run stages through their deterministic program entry points. Hermes coordinates commands,
-checks machine-readable results, handles authentication interaction, and reports outcomes;
-it must not label or semantically re-filter articles one at a time.
+Run stages through their deterministic program entry points. Scheduled crawling is a
+native no-agent script task; Hermes may start an explicitly requested crawl with one command,
+but must not reproduce its authentication, waiting, or verification state machine.
 
 ## Stage entry points
 
 Use the project virtual environment and absolute paths:
 
 ```text
-authentication/crawl  scripts/check_wechat_auth_notify.py; src/crawl.py --verbose
+authentication/crawl  ./run.sh [--notify]
 label                 python -m src.labeling.cli --run-dir <run_dir>
 select                select_articles.py matches --run-dir <run_dir>
-report                select_articles.py write-report --run-dir <run_dir> --summaries <json>
+report                select_articles.py write-report --run-dir <run_dir>
 database              wx-crawl-db ingest/prune
 AI-table sync          sync_articles.py --mode incremental
 ```
 
 `<run_dir>` must be a direct child of `results/record/` containing
 `article_details.csv`. Never run the unscoped label command from a batch pipeline.
+Normal automation must not add `--verbose`: each command prints one compact JSON
+summary to stdout and writes per-article details into the reported files. Add
+`--verbose` only for an explicit human diagnosis; do not feed verbose output back
+into the Agent when a summary and `details_file` are sufficient.
 
 ## Complete workflow
 
-1. Execute authentication preflight with the project interpreter:
+1. For an explicitly requested fresh crawl, invoke the single blocking entry point once:
 
    ```bash
-   /root/workspace/wx-crawl/.venv/bin/python \
-     /root/workspace/wx-crawl/scripts/check_wechat_auth_notify.py
+   cd /root/workspace/wx-crawl && ./run.sh
    ```
 
-   Start the crawler only when the command exits zero and its final JSON reports
-   `logged_in=true`, `active=true`, and `status=ready` or `ready_after_login`.
-   The wrapper owns QR delivery and status notifications; do not send a duplicate QR.
+   The program owns service startup, credential checks, DingTalk QR delivery, scan
+   waiting, crawl execution, records, and cleanup. Do not run a separate authentication
+   preflight, poll a background subprocess from the Agent, send another QR, or re-check
+   files after exit code zero and JSON `status=ok`.
 
-2. Run the crawler under its shared lock:
+   Scheduled full-pipeline processing should not start another crawl: the 20:00
+   Hermes no-agent crawl job produces the input batch independently.
 
-   ```bash
-   /root/workspace/wx-crawl/.venv/bin/python \
-     /root/workspace/wx-crawl/src/crawl.py --verbose
-   ```
-
-   Only a successful run containing `article_details.csv` may enter downstream stages.
-
-3. Enumerate every valid incomplete batch oldest first. Skip batches covered by
+2. Enumerate every valid incomplete batch oldest first. Skip batches covered by
    `pipeline_coverage.json` or completed by a valid `pipeline_state.json`.
 
-4. Label one batch with a single Python process:
+3. Label one batch with a single Python process:
 
    ```bash
    /root/workspace/wx-crawl/.venv/bin/python -m src.labeling.cli \
@@ -60,11 +58,15 @@ AI-table sync          sync_articles.py --mode incremental
    By default, the command inherits the active Hermes provider, model, base URL,
    and provider key; do not request a duplicate labeling key when Hermes already
    has one. Run the same command with `--check` first to report the resolved source.
-   Require exit code zero and JSON `failed=0`. Existing valid v2 labels are skipped.
+   Require exit code zero and JSON `failed=0`. Existing v2 labels with summaries are
+   skipped; summary-less v2 labels are upgraded in the same model call. Delete v1
+   labels rather than attempting to promote them.
    Never replace this command with the old per-article `inventory`/`write` Agent loop.
    Never proceed while selector `status` reports `pending_label_count > 0`.
+   Read `labeling_result.json` only when the compact counts indicate a failure or
+   the user requests article-level details.
 
-5. Perform deterministic selection in Python:
+4. Perform deterministic selection in Python:
 
    ```bash
    /root/workspace/wx-crawl/.venv/bin/python \
@@ -76,11 +78,12 @@ AI-table sync          sync_articles.py --mode incremental
    judgment. Verify `labeling_ledger.json` exists and its entry count equals the
    candidate count. Preserve DROP and REVIEW reasons from `label.json`.
 
-6. Generate summaries only for selected articles, save `article_summaries.json`, then
-   call `write-report`. Summary generation is not selection and must not change the
-   label decision. Verify `filtered_articles.json` count equals the matches count.
+5. Call `write-report` directly. The label API already generated `summary` in the same
+   response as every v2 decision; the report writer selects KEEP summaries and writes
+   `article_summaries.json` for compatibility. Never make the Agent read articles and
+   summarize them again. Verify `filtered_articles.json` count equals the matches count.
 
-7. Import and clean up only after a verified report:
+6. Import and clean up only after a verified report:
 
    ```bash
    /root/workspace/wx-crawl/wx-crawl-db ingest --run-dir <run_dir>
@@ -89,7 +92,7 @@ AI-table sync          sync_articles.py --mode incremental
 
    Never prune before successful labeling and import. Preserve source data on failure.
 
-8. Synchronize once after all successful imports and verify the returned counts:
+7. Synchronize once after all successful imports and verify the returned counts:
 
    ```bash
    /root/workspace/wx-crawl/.venv/bin/python \
@@ -97,7 +100,7 @@ AI-table sync          sync_articles.py --mode incremental
      --mode incremental
    ```
 
-9. Write `pipeline_state.json` as completed only after every required stage and
+8. Write `pipeline_state.json` as completed only after every required stage and
    AI-table readback succeeds.
 
 ## Individual stages
@@ -105,7 +108,7 @@ AI-table sync          sync_articles.py --mode incremental
 When the user requests only one stage, run only that stage and its required read-only
 precondition checks:
 
-- crawl: authenticate and crawl; do not label automatically;
+- crawl: run `./run.sh` once; authentication and QR handling are internal; do not label automatically;
 - label: require a specific `run_dir`, run the Python labeler, then report its counts;
 - select: require zero pending labels, run `matches`, and report the ledger path;
 - report/import: require validated matches and complete summaries before writing/importing;

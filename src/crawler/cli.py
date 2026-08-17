@@ -4,6 +4,7 @@ import argparse
 import csv
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import random
@@ -32,7 +33,7 @@ try:
         service_environment,
     )
     from auth.storage import ensure_auth_layout
-    from auth.dingtalk_notify import send_login_qr
+    from auth.dingtalk_notify import send_auth_status, send_crawl_status, send_login_qr
 except ModuleNotFoundError:
     from src.auth.wechat_mp_tools import (
         ensure_login as ensure_wechat_login,
@@ -40,7 +41,7 @@ except ModuleNotFoundError:
         service_environment,
     )
     from src.auth.storage import ensure_auth_layout
-    from src.auth.dingtalk_notify import send_login_qr
+    from src.auth.dingtalk_notify import send_auth_status, send_crawl_status, send_login_qr
 from .content import (
     article_url_key,
     normalize_article_url,
@@ -123,7 +124,9 @@ def setup_logging(verbose: bool, tools_log_dir: Path | None = None) -> logging.L
         logger.addHandler(file_handler)
     console = logging.StreamHandler()
     console.setFormatter(logging.Formatter("%(message)s"))
+    console.setLevel(logging.INFO if verbose else logging.WARNING)
     logger.addHandler(console)
+    logger.propagate = False
     return logger
 
 
@@ -296,7 +299,11 @@ def render_run_report(report: RunReport) -> str:
 
 def print_run_report(report: RunReport) -> None:
     text = render_run_report(report)
-    print("\n" + text, end="", flush=True)
+    print("\n" + text, end="", flush=True, file=sys.stderr)
+
+
+def emit_json(payload: dict[str, object]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 def directory_size(path: Path) -> int:
@@ -768,18 +775,50 @@ def remove_login_qr(qr_path: Path) -> None:
 
 
 class ManagedService:
-    def __init__(self, api: LocalAPI, logger: logging.Logger, tools_log_dir: Path):
+    def __init__(
+        self,
+        api: LocalAPI,
+        logger: logging.Logger,
+        tools_log_dir: Path,
+        *,
+        stop_existing_on_close: bool = False,
+    ):
         self.api = api
         self.logger = logger
         self.tools_log_dir = tools_log_dir
         self.qr_path = tools_log_dir / "wechat-login-qr.png"
         self.service_log_path = tools_log_dir / "wechat-mp-tools.log"
         self.process: subprocess.Popen | None = None
+        self.adopted_pid: int | None = None
+        self.stop_existing_on_close = stop_existing_on_close
         self.log_handle = None
+
+    def find_project_service_pid(self) -> int | None:
+        expected_cwd = MP_PROJECT.resolve()
+        for process_dir in Path("/proc").glob("[0-9]*"):
+            try:
+                arguments = process_dir.joinpath("cmdline").read_bytes().split(b"\0")
+                arguments = [item.decode(errors="replace") for item in arguments if item]
+                cwd = process_dir.joinpath("cwd").resolve()
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+            if cwd != expected_cwd or not any(Path(item).name == "app.py" for item in arguments):
+                continue
+            if "--port" in arguments:
+                index = arguments.index("--port")
+                if index + 1 >= len(arguments) or arguments[index + 1] != "5200":
+                    continue
+            return int(process_dir.name)
+        return None
 
     def start(self) -> None:
         if self.api.healthy():
-            self.logger.info("使用已运行的 wechat-mp-tools 服务")
+            if self.stop_existing_on_close:
+                self.adopted_pid = self.find_project_service_pid()
+            self.logger.info(
+                "使用已运行的 wechat-mp-tools 服务%s",
+                "，no-agent 任务结束后关闭" if self.adopted_pid else "",
+            )
             return
         self.tools_log_dir.mkdir(parents=True, exist_ok=True)
         self.log_handle = self.service_log_path.open("a", encoding="utf-8")
@@ -804,6 +843,21 @@ class ManagedService:
         raise RuntimeError("wechat-mp-tools 启动超时")
 
     def ensure_login(self, *, force: bool = False, on_qr: Callable[[Path], None] | None = None) -> None:
+        def notify_auth_status(status: str, detail: str = "") -> None:
+            try:
+                send_auth_status(status, detail)
+            except Exception as exc:
+                self.logger.warning("DingTalk 认证状态通知失败：%s", exc)
+
+        def deliver_qr(path: Path) -> None:
+            if on_qr is None:
+                return
+            try:
+                on_qr(path)
+            except Exception as exc:
+                notify_auth_status("qr_error", str(exc))
+                raise
+
         ensure_wechat_login(
             self.api,
             self.logger,
@@ -814,7 +868,9 @@ class ManagedService:
             WECHAT_AUTH_PATH,
             AUTH_WAIT_SECONDS,
             force=force,
-            on_qr=on_qr,
+            on_qr=deliver_qr,
+            on_login=lambda: notify_auth_status("success"),
+            on_timeout=lambda: notify_auth_status("timeout"),
         )
 
     def close(self) -> None:
@@ -829,6 +885,24 @@ class ManagedService:
                 if self.process.poll() is None:
                     os.killpg(self.process.pid, signal.SIGKILL)
                     self.process.wait(timeout=5)
+        elif self.adopted_pid is not None:
+            self.logger.info("关闭 no-agent 任务接管的 wechat-mp-tools 服务")
+            try:
+                process_group = os.getpgid(self.adopted_pid)
+                if process_group == self.adopted_pid:
+                    os.killpg(process_group, signal.SIGTERM)
+                else:
+                    os.kill(self.adopted_pid, signal.SIGTERM)
+                for _ in range(100):
+                    try:
+                        os.kill(self.adopted_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+                else:
+                    os.kill(self.adopted_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if self.log_handle is not None:
             self.log_handle.close()
 
@@ -1227,6 +1301,8 @@ def execute(
     report: RunReport,
     logger: logging.Logger,
     tools_log_dir: Path,
+    *,
+    stop_existing_service: bool = False,
 ) -> Path:
     work_root = RESULTS_ROOT / ".working" / report.stamp
     RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1235,7 +1311,12 @@ def execute(
     work_root.mkdir(parents=True, exist_ok=False)
 
     api = LocalAPI()
-    service = ManagedService(api, logger, tools_log_dir)
+    service = ManagedService(
+        api,
+        logger,
+        tools_log_dir,
+        stop_existing_on_close=stop_existing_service,
+    )
     try:
         service.start()
         service.ensure_login(
@@ -1326,7 +1407,31 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="抓取登记表中的微信公众号最近文章")
     parser.add_argument("--check", action="store_true", help="只检查配置、输入与依赖，不联网抓取")
     parser.add_argument("--verbose", action="store_true", help="输出详细日志")
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="结束后将简短结果直接发送到配置的 DingTalk 群（供 no-agent 定时任务使用）",
+    )
+    parser.add_argument(
+        "--scheduled",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
+
+
+def emit_final_result(
+    payload: dict[str, object], *, notify: bool, logger: logging.Logger
+) -> None:
+    if notify:
+        try:
+            send_crawl_status(payload)
+            payload["notification"] = "sent"
+        except Exception as exc:
+            payload["notification"] = "failed"
+            payload["notification_error"] = str(exc)[:500]
+            logger.error("DingTalk 爬取结果通知失败：%s", exc)
+    emit_json(payload)
 
 
 def preflight(config: CrawlConfig) -> list[str]:
@@ -1354,6 +1459,8 @@ def main() -> None:
     logger = setup_logging(args.verbose)
     report: RunReport | None = None
     final_status = "失败"
+    final_error = ""
+    output_emitted = False
     try:
         config = load_config()
         seed_urls = preflight(config)
@@ -1377,6 +1484,19 @@ def main() -> None:
                 "检查通过：输入文件发现 %d 个公众号文章链接；注册表已有 %d 个公众号；%s",
                 len(seed_urls), registered_count, detail,
             )
+            emit_final_result(
+                {
+                    "status": "ok",
+                    "command": "check",
+                    "input_csv": str(config.input_csv),
+                    "seed_url_count": len(seed_urls),
+                    "registered_account_count": registered_count,
+                    "mode": config.mode,
+                },
+                notify=False,
+                logger=logger,
+            )
+            output_emitted = True
             return
         candidate_report = RunReport(config=config)
         record_dir = RECORD_ROOT / candidate_report.stamp
@@ -1393,28 +1513,62 @@ def main() -> None:
             )
         with single_instance():
             result_dir = execute(
-                config, seed_urls, report, logger, tools_log_dir
+                config,
+                seed_urls,
+                report,
+                logger,
+                tools_log_dir,
+                stop_existing_service=args.notify or args.scheduled,
             )
         final_status = "成功"
         logger.info("爬取结束，结果目录：%s", result_dir)
     except KeyboardInterrupt:
         final_status = "已中断"
+        final_error = "用户中止爬取"
         logger.error("用户中止爬取")
         raise SystemExit(130)
     except Exception as exc:
         final_status = "失败"
+        final_error = str(exc)
         logger.error("爬取未完成：%s", exc)
         raise SystemExit(1)
     finally:
         if report is not None:
             report.finish(final_status)
-            print_run_report(report)
+            if args.verbose:
+                print_run_report(report)
+            saved_record_dir: Path | None = None
+            summary_path: Path | None = None
             try:
                 saved_record_dir = save_run_result_records(report)
                 registry = load_registry()
                 summary_path = update_global_summary(registry) if registry else RESULTS_ROOT / "summary.csv"
-                print(f"本次爬取记录：{saved_record_dir}", flush=True)
-                if registry:
-                    print(f"全局文章汇总：{summary_path}", flush=True)
             except Exception as exc:
                 logger.error("无法保存结果统计 CSV：%s", exc)
+                if not final_error:
+                    final_error = f"无法保存结果统计 CSV：{exc}"
+            emit_final_result(
+                {
+                    "status": {"成功": "ok", "已中断": "interrupted"}.get(final_status, "failed"),
+                    "command": "crawl",
+                    "run_id": report.stamp,
+                    "mode": report.config.mode,
+                    "account_count": len(report.accounts),
+                    "new_article_count": sum(item.new_articles for item in report.accounts),
+                    "failed_account_count": sum(item.status != "成功" for item in report.accounts),
+                    "duration_seconds": round(report.duration_seconds, 3),
+                    "record_dir": str(saved_record_dir) if saved_record_dir else None,
+                    "summary_file": str(summary_path) if summary_path else None,
+                    "details_file": str((saved_record_dir / "account_summary.csv")) if saved_record_dir else None,
+                    "error": final_error or None,
+                },
+                notify=args.notify,
+                logger=logger,
+            )
+            output_emitted = True
+        if not output_emitted:
+            emit_final_result(
+                {"status": "failed", "command": "crawl", "error": final_error or "unknown error"},
+                notify=args.notify,
+                logger=logger,
+            )

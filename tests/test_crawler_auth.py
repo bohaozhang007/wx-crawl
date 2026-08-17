@@ -24,6 +24,8 @@ if "lxml" not in sys.modules:
         sys.modules["lxml.html"] = html_module
 
 from src.crawler import cli
+from src.auth.dingtalk_notify import crawl_status_message
+from scripts.run_no_agent_crawl import delivery_message, last_json_object
 
 
 class AuthenticationGateTest(unittest.TestCase):
@@ -40,6 +42,53 @@ class AuthenticationGateTest(unittest.TestCase):
         account = cli.RegisteredAccount(1, "mp1", "测试号", "https://mp.weixin.qq.com/s/x")
         with self.assertRaises(cli.AuthenticationRequiredError):
             cli.refresh_registered_accounts(api, [account], {}, logging.getLogger("test"))
+
+
+class NoAgentNotificationTest(unittest.TestCase):
+    def test_no_agent_runner_parses_last_compact_json(self):
+        payload = last_json_object('progress\n{"status":"ok","command":"crawl"}\n')
+        self.assertEqual(payload, {"status": "ok", "command": "crawl"})
+
+    def test_no_agent_delivery_is_human_readable(self):
+        message = delivery_message(
+            {
+                "status": "ok",
+                "command": "crawl",
+                "run_id": "run-1",
+                "account_count": 33,
+                "new_article_count": 4,
+                "duration_seconds": 120,
+                "record_dir": "/tmp/run-1",
+            },
+            0,
+        )
+        self.assertIn("no-agent 爬取完成", message)
+        self.assertIn("新增文章：4 篇", message)
+
+    def test_success_message_uses_compact_crawl_summary(self):
+        message = crawl_status_message(
+            {
+                "status": "ok",
+                "run_id": "2026_08_17_20_00_00",
+                "account_count": 33,
+                "new_article_count": 8,
+                "duration_seconds": 1500,
+                "record_dir": "/tmp/record",
+            }
+        )
+        self.assertIn("新增文章：8 篇", message)
+        self.assertIn("耗时：25.0 分钟", message)
+        self.assertNotIn("account_summary", message)
+
+    def test_emit_final_result_notifies_once_then_prints_json(self):
+        payload = {"status": "failed", "command": "crawl", "error": "boom"}
+        with patch.object(cli, "send_crawl_status") as notify, patch.object(
+            cli, "emit_json"
+        ) as emit:
+            cli.emit_final_result(payload, notify=True, logger=logging.getLogger("test"))
+        notify.assert_called_once()
+        emit.assert_called_once()
+        self.assertEqual(payload["notification"], "sent")
 
 
 class IncrementalLookbackTest(unittest.TestCase):

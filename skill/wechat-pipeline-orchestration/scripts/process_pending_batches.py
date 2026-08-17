@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO = Path("/root/workspace/wx-crawl")
@@ -80,13 +83,48 @@ def require_labels(run_dir: Path) -> dict:
     return status
 
 
+def write_details(payload: dict) -> Path:
+    stamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+    path = RECORD / f"pipeline_execution_{stamp}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process all pending crawl batches; never crawls")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="show per-run detailed JSON")
     args = parser.parse_args()
     batches = [p for p in pending() if not is_covered_by_backfill(p)]
-    print(json.dumps({"pending_batches": [str(p) for p in batches], "count": len(batches), "covered_by_backfill": len(pending()) - len(batches)}, ensure_ascii=False))
+    details = {
+        "pending_batches": [str(p) for p in batches],
+        "count": len(batches),
+        "covered_by_backfill": len(pending()) - len(batches),
+        "processed": [],
+    }
     if args.dry_run:
+        details_path = write_details(details)
+        payload = details if args.verbose else {
+            "status": "ok", "command": "process-pending", "dry_run": True,
+            "pending_count": len(batches), "processed_count": 0,
+            "details_file": str(details_path),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2 if args.verbose else None))
         return 0
     for run_dir in batches:
         # Each batch is independent and is marked only after every stage succeeds.
@@ -109,12 +147,10 @@ def main() -> int:
         if len(ledger.get("entries", [])) != int(ledger.get("candidates", -1)):
             raise RuntimeError(f"{run_dir.name}: invalid or incomplete labeling ledger")
         report = run_dir / "filtered_articles.json"
-        summaries = run_dir / "article_summaries.json"
-        if selected and not summaries.is_file():
-            raise RuntimeError(f"{run_dir.name}: selected articles exist but summaries are missing")
-        if not summaries.is_file():
-            summaries.write_text("{}\n", encoding="utf-8")
-        run([str(PYTHON), str(SELECTOR), "write-report", "--run-dir", str(run_dir), "--summaries", str(summaries)])
+        # New v2 labels contain a summary from the same model call. The report
+        # writer reads it directly and materializes article_summaries.json for
+        # compatibility; no Agent-side per-article summary loop is allowed.
+        run([str(PYTHON), str(SELECTOR), "write-report", "--run-dir", str(run_dir)])
         report_data = json.loads(report.read_text(encoding="utf-8"))
         if int(report_data.get("count", len(report_data.get("articles", [])))) != selected:
             raise RuntimeError(f"{run_dir.name}: matches/report count mismatch")
@@ -124,7 +160,17 @@ def main() -> int:
         sync_result = run([str(PYTHON), str(SYNC), "--mode", "incremental"])
         sync_json = parse_json_object(sync_result)
         run([str(PYTHON), str(STATE), "mark-completed", str(run_dir), "--selected", str(selected), "--database-result", json.dumps(db_json, ensure_ascii=False), "--sync-result", json.dumps(sync_json, ensure_ascii=False)])
-        print(json.dumps({"run_id": run_dir.name, "selected": selected, "database": db_json, "sync": sync_json}, ensure_ascii=False))
+        details["processed"].append(
+            {"run_id": run_dir.name, "selected": selected, "database": db_json, "sync": sync_json}
+        )
+    details_path = write_details(details)
+    payload = details if args.verbose else {
+        "status": "ok", "command": "process-pending", "dry_run": False,
+        "pending_count": len(batches), "processed_count": len(details["processed"]),
+        "selected_count": sum(item["selected"] for item in details["processed"]),
+        "details_file": str(details_path),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if args.verbose else None))
     return 0
 
 

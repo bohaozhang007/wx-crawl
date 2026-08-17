@@ -5,6 +5,7 @@ import argparse
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -112,6 +113,7 @@ def write_label(
     reason_code: str,
     decision_path: list[str],
     reason: str,
+    summary: str,
     evidence: list[list[str]],
     application_type: str,
     domains: list[str],
@@ -135,6 +137,7 @@ def write_label(
         "decision_path": decision_path,
         "reason_code": reason_code,
         "reason": reason.strip(),
+        "summary": summary.strip(),
         "evidence": [
             {"type": evidence_type, "location": location.strip(), "text": text.strip()}
             for evidence_type, location, text in evidence
@@ -142,7 +145,7 @@ def write_label(
         "application_type": application_type,
         "domains": [domain for domain in DOMAINS if domain in selected],
     }
-    errors = validate_payload(payload)
+    errors = validate_payload(payload, require_summary=True)
     if errors:
         raise LabelError("; ".join(errors))
 
@@ -181,7 +184,19 @@ def command_next(args: argparse.Namespace) -> None:
 def command_count(_: argparse.Namespace) -> None:
     articles = article_directories()
     pending = [path for path in articles if label_errors(path)]
-    print_json({"articles": len(articles), "valid": len(articles) - len(pending), "pending": len(pending)})
+    summary_missing = 0
+    for article_dir in articles:
+        label, errors = read_label(article_dir / "label.json")
+        if not errors and label is not None and not str(label.get("summary") or "").strip():
+            summary_missing += 1
+    print_json(
+        {
+            "articles": len(articles),
+            "valid": len(articles) - len(pending),
+            "pending": len(pending),
+            "summary_missing": summary_missing,
+        }
+    )
 
 
 def command_inventory(args: argparse.Namespace) -> None:
@@ -195,6 +210,7 @@ def command_write(args: argparse.Namespace) -> None:
         args.reason_code,
         args.path_step,
         args.reason,
+        args.summary,
         args.evidence,
         args.application_type,
         args.domain,
@@ -203,22 +219,135 @@ def command_write(args: argparse.Namespace) -> None:
     print(path)
 
 
+def raw_label(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def article_url(article_dir: Path) -> str:
+    for name in ("metadata.json", "data.json", "fallback_metadata.json"):
+        path = article_dir / name
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("url"), str):
+            value = payload["url"].strip()
+            if value:
+                return value
+    return ""
+
+
+def write_payload_atomic(article_dir: Path, payload: dict[str, Any]) -> Path:
+    label_path = article_dir / "label.json"
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=article_dir,
+            prefix=".label.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, 0o644)
+        os.replace(temporary_name, label_path)
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+    return label_path
+
+
+def command_purge_v1(args: argparse.Namespace) -> None:
+    legacy: list[Path] = []
+    for article_dir in article_directories():
+        label_path = article_dir / "label.json"
+        if not label_path.is_file():
+            continue
+        payload = raw_label(label_path)
+        if payload is None:
+            continue
+        version = payload.get("schema_version")
+        if version in (None, 1, "1"):
+            legacy.append(label_path)
+    if args.confirm_delete:
+        for path in legacy:
+            path.unlink()
+    print_json(
+        {
+            "status": "ok",
+            "command": "purge-v1",
+            "v1_found": len(legacy),
+            "deleted": len(legacy) if args.confirm_delete else 0,
+            "confirmed": args.confirm_delete,
+        }
+    )
+
+
+def command_backfill_summaries(args: argparse.Namespace) -> None:
+    database = Path(args.db).resolve()
+    if not database.is_file():
+        raise LabelError(f"database does not exist: {database}")
+    with sqlite3.connect(database) as connection:
+        summaries = {
+            str(url).strip(): str(summary).strip()
+            for url, summary in connection.execute("SELECT url, summary FROM articles")
+            if str(url).strip() and str(summary).strip()
+        }
+    missing = 0
+    updated = 0
+    for article_dir in article_directories():
+        label_path = article_dir / "label.json"
+        payload, errors = read_label(label_path)
+        if errors or payload is None or payload.get("summary"):
+            continue
+        missing += 1
+        summary = summaries.get(article_url(article_dir), "")
+        if not summary:
+            continue
+        updated_payload = {**payload, "summary": summary}
+        validation_errors = validate_payload(updated_payload, require_summary=True)
+        if validation_errors:
+            raise LabelError("; ".join(validation_errors))
+        write_payload_atomic(article_dir, updated_payload)
+        updated += 1
+    print_json(
+        {
+            "status": "ok",
+            "command": "backfill-summaries",
+            "missing_before": missing,
+            "updated": updated,
+            "remaining": missing - updated,
+            "database": str(database),
+        }
+    )
+
+
 def command_validate(_: argparse.Namespace) -> None:
     articles = article_directories()
     invalid: list[dict[str, Any]] = []
     labeled = 0
+    summary_missing = 0
     for article_dir in articles:
         if (article_dir / "label.json").is_file():
             labeled += 1
         errors = label_errors(article_dir)
         if errors and errors != ["label.json is missing"]:
             invalid.append({"article_dir": str(article_dir), "errors": errors})
+        label, read_errors = read_label(article_dir / "label.json")
+        if not read_errors and label is not None and not str(label.get("summary") or "").strip():
+            summary_missing += 1
     print_json(
         {
             "articles": len(articles),
             "labeled": labeled,
             "valid": labeled - len(invalid),
             "pending": len(articles) - labeled + len(invalid),
+            "summary_missing": summary_missing,
             "invalid": invalid,
         }
     )
@@ -253,6 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="repeat ordered steps such as E1:PASS and O1:O1-D1",
     )
     write_parser.add_argument("--reason", required=True)
+    write_parser.add_argument("--summary", required=True, help="factual 1-3 sentence article summary")
     write_parser.add_argument(
         "--evidence",
         action="append",
@@ -269,6 +399,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="validate all existing labels")
     validate_parser.set_defaults(func=command_validate)
+
+    purge_parser = subparsers.add_parser("purge-v1", help="delete legacy v1 label.json files")
+    purge_parser.add_argument("--confirm-delete", action="store_true")
+    purge_parser.set_defaults(func=command_purge_v1)
+
+    backfill_parser = subparsers.add_parser(
+        "backfill-summaries", help="copy existing database summaries into v2 labels"
+    )
+    backfill_parser.add_argument("--db", default=str(REPO_ROOT / "results" / "articles.sqlite3"))
+    backfill_parser.set_defaults(func=command_backfill_summaries)
     return parser
 
 

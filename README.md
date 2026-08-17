@@ -48,6 +48,7 @@ wx-crawl/
 │   └── crawl.py                 Command-line entry point
 ├── install/
 │   ├── requirements.txt         Dependencies used directly by wx-crawl
+│   ├── hermes/                  Hermes no-agent cron launcher
 │   └── third_party_versions.yaml
 │                                Upstream repositories and pinned commits
 ├── third_party/                 Local upstream clones and virtual environments
@@ -119,7 +120,7 @@ In either mode, URLs already stored locally are skipped. Explicit URLs from the 
 ### 3.3 Check local readiness
 
 ```bash
-python3 src/crawl.py --check
+./run.sh --check
 ```
 
 `--check` validates the local Python environments, required paths, `config.yaml`, the CSV extension and readability, the account registry, and the authentication storage layout. It reports how many input links and registered accounts were found.
@@ -129,21 +130,56 @@ It does not start a crawl, request a QR code, validate current credentials again
 ### 3.4 Start the crawl
 
 ```bash
-python3 src/crawl.py
+./run.sh
 ```
 
-For more detailed console and file logging:
+The default command prints one compact JSON summary to stdout. Per-account details
+and tool logs remain in the run record. For a human troubleshooting session, show
+detailed progress on the terminal with:
 
 ```bash
-python3 src/crawl.py --verbose
+./run.sh --verbose
 ```
 
 Press `Ctrl+C` once to stop a long run. Articles that were already completed remain available, an interrupted run record is written, temporary working data is removed, and any tool service started by that run is closed.
 
-### 3.5 Label downloaded articles through a model API
+For a no-agent invocation that also sends the final compact result directly to the
+configured DingTalk group, run:
 
-This command performs labeling only. It does not crawl, select, summarize, or
-import articles into SQLite.
+```bash
+./run.sh --notify
+```
+
+### 3.5 No-agent scheduled crawls
+
+Recurring crawls use Hermes' native script-only `no_agent` mode at 12:05 and 20:00
+local time. Hermes directly starts `~/.hermes/scripts/wx_crawl_no_agent.sh`; it does
+not create an Agent session or call a language model. Authentication checks, QR
+delivery, the five-minute scan wait, crawling, result recording, and service shutdown
+are handled in Python. The script's short stdout report is delivered to DingTalk by
+the scheduler.
+
+Inspect the schedule without starting a crawl:
+
+```bash
+hermes cron list
+```
+
+The two crawl jobs must show `Mode: no-agent`. Do not add an equivalent Agent-mode
+job, because that would duplicate the schedule and reintroduce model calls and
+Agent-side polling.
+
+On a fresh machine, copy `install/hermes/wx_crawl_no_agent.sh` to
+`~/.hermes/scripts/`, make it executable, create or convert the 12:05 and 20:00 jobs
+with `--script wx_crawl_no_agent.sh --no-agent`, and set Hermes
+`cron.script_timeout_seconds` to at least `21600` so a multi-hour crawl is not stopped
+by the default one-hour script limit.
+
+### 3.6 Label downloaded articles through a model API
+
+This command performs labeling and generates each article's summary in the same model
+response. It does not crawl, select articles, build the filtered report, or import
+articles into SQLite.
 
 By default, labeling inherits the active Hermes Agent provider, model, base URL,
 and provider API key from `~/.hermes/config.yaml` and `~/.hermes/.env`. Therefore,
@@ -190,13 +226,22 @@ Then label every missing or invalid article in that run:
 The program sends each complete `content.txt`, its metadata, the versioned
 decision tree, and the research profile to the configured model. It validates
 the structured response and quoted evidence locally before atomically writing
-`label.json`. Existing valid v2 labels are skipped. Invalid or legacy labels are
-replaced only after a new valid result is available. Use `--replace` only when
+`label.json`. The same API response also contains a factual 1-3 sentence `summary`
+for every KEEP, DROP, or REVIEW article, so the Agent does not make a second summary
+call after selection. Existing v2 labels with summaries are skipped; summary-less v2
+labels are upgraded when processed. V1 labels are unsupported and should be deleted,
+not promoted. Invalid labels are replaced only after a new valid result is available.
+Use `--replace` only when
 you intentionally want to relabel articles that already have a valid v2 label.
+By default, stdout contains only fixed summary fields and a `details_file` path;
+per-article outcomes are saved as `labeling_result.json` in the run directory.
+Add `--verbose` only when a person needs to inspect per-article progress and the
+detailed JSON in the terminal. This keeps Agent tool results small during normal
+multi-stage orchestration.
 
 ### Notes
 
-- On the first authenticated run, the terminal prints the exact path of a QR-code PNG under the current run's `tools-log` directory. Scan it with WeChat and confirm the login within five minutes. The QR image is removed afterward, while the credentials are stored locally for reuse.
+- On the first authenticated run, or after credentials expire, the crawler sends the QR image directly to the configured DingTalk group and also records its temporary path under the current run's `tools-log` directory. Scan it with WeChat within five minutes. The QR image is removed afterward, while credentials are stored locally for reuse.
 - One authentication is used for the history backend; a separate scan is not required for every Official Account.
 - Expired or invalid credentials may cause a later run to request a new scan.
 - Newly discovered accounts are added to `account_sources.csv`. Every registered account name is revalidated on each run; stable account IDs are retained if an identity check is inconsistent.

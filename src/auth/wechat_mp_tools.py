@@ -20,7 +20,21 @@ def remove_legacy_auth_file(path: Path) -> None:
     try: path.unlink()
     except FileNotFoundError: pass
 
-def ensure_login(api, logger, qr_path: Path, save_qr: Callable[[str, Path], Path], remove_qr: Callable[[Path], None], legacy_auth_path: Path, auth_display_path: Path, timeout_seconds: int, max_attempts: int = 3, force: bool = False, on_qr: Callable[[Path], None] | None = None) -> None:
+def ensure_login(
+    api,
+    logger,
+    qr_path: Path,
+    save_qr: Callable[[str, Path], Path],
+    remove_qr: Callable[[Path], None],
+    legacy_auth_path: Path,
+    auth_display_path: Path,
+    timeout_seconds: int,
+    max_attempts: int = 3,
+    force: bool = False,
+    on_qr: Callable[[Path], None] | None = None,
+    on_login: Callable[[], None] | None = None,
+    on_timeout: Callable[[], None] | None = None,
+) -> None:
     status = api.request("GET", "/api/auth/status")
     if status.get("logged_in") and not force:
         remove_legacy_auth_file(legacy_auth_path)
@@ -39,6 +53,8 @@ def ensure_login(api, logger, qr_path: Path, save_qr: Callable[[str, Path], Path
                 if status.get("logged_in"):
                     remove_legacy_auth_file(legacy_auth_path)
                     logger.info("扫码成功，凭据已保存到 %s", auth_display_path)
+                    if on_login is not None:
+                        on_login()
                     return
                 state = status.get("login_state") or {}
                 qrcode_url = str(state.get("qrcode") or "")
@@ -55,6 +71,8 @@ def ensure_login(api, logger, qr_path: Path, save_qr: Callable[[str, Path], Path
                     time.sleep(attempt)
                     break
             else: break
+        if on_timeout is not None:
+            on_timeout()
         raise RuntimeError("扫码登录等待超时")
     finally:
         remove_qr(qr_path)

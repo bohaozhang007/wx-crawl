@@ -75,6 +75,21 @@ class LabelSchemaV2Test(unittest.TestCase):
         errors = validate_payload(payload)
         self.assertTrue(any("belongs to DROP" in error for error in errors))
 
+    def test_summary_is_optional_for_existing_v2_but_validated_when_present(self) -> None:
+        payload = label_payload(
+            "KEEP",
+            "K1",
+            ["E1:PASS", "O1:PASS", "O2:PASS", "R1:PASS", "A1:PASS", "T1:PASS", "D1:PASS", "K1"],
+            "科研项目申请",
+            ["大模型"],
+        )
+        self.assertEqual(validate_payload(payload), [])
+        self.assertTrue(validate_payload(payload, require_summary=True))
+        payload["summary"] = "文章发布大模型科研项目申报通知，明确申报期限和研究任务。"
+        self.assertEqual(validate_payload(payload, require_summary=True), [])
+        payload["summary"] = "   "
+        self.assertTrue(validate_payload(payload, require_summary=True))
+
 
 class SelectorDecisionTest(unittest.TestCase):
     def setUp(self) -> None:

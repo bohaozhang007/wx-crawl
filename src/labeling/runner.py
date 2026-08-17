@@ -139,6 +139,12 @@ def discover_run_article_dirs(
             f"article selector failed for {resolved_run} (exit {completed.returncode}): {detail}"
         )
     payload = _parse_json_object(completed.stdout)
+    details_file = payload.get("details_file")
+    if not isinstance(payload.get("articles"), list) and isinstance(details_file, str):
+        try:
+            payload = json.loads(Path(details_file).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LabelingError(f"cannot read selector details {details_file}: {exc}") from exc
     articles = payload.get("articles")
     if not isinstance(articles, list):
         raise LabelingError("article selector JSON has no articles array")
@@ -185,7 +191,7 @@ def _normalize_evidence(value: str) -> str:
 
 
 def validate_model_label(payload: dict[str, Any], article: ArticleInput) -> list[str]:
-    errors = validate_payload(payload)
+    errors = validate_payload(payload, require_summary=True)
     source = _normalize_evidence(article.evidence_text)
     for index, evidence in enumerate(payload.get("evidence", [])):
         if not isinstance(evidence, dict) or evidence.get("type") == "missing_evidence":
@@ -279,7 +285,7 @@ async def run_labeling(
         label_path = article_dir / "label.json"
         if label_path.is_file() and not replace:
             label, errors = read_label(label_path)
-            if label is not None and not errors:
+            if label is not None and not errors and str(label.get("summary") or "").strip():
                 skipped.append({"article_dir": str(article_dir), "status": "skipped_valid"})
                 continue
         candidates.append(article_dir)

@@ -12,12 +12,13 @@ DECISION_TREE_PATH = (
     REPO_ROOT / "skill" / "label-wechat-articles" / "references" / "decision-tree.md"
 )
 SCHEMA_VERSION = 2
+SUMMARY_MAX_CHARS = 500
 DECISIONS = ("KEEP", "DROP", "REVIEW")
 APPLICATION_TYPES = ("科研项目申请", "科研指南申请", "都不是")
 POSITIVE_APPLICATION_TYPES = ("科研项目申请", "科研指南申请")
 DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
 EVIDENCE_TYPES = ("solicitation", "research_task", "domain", "negative", "missing_evidence")
-EXPECTED_KEYS = {
+REQUIRED_KEYS = {
     "schema_version",
     "tree_version",
     "decision",
@@ -28,6 +29,7 @@ EXPECTED_KEYS = {
     "application_type",
     "domains",
 }
+EXPECTED_KEYS = REQUIRED_KEYS | {"summary"}
 
 TREE_VERSION_RE = re.compile(r"^Tree version: `([^`]+)`\s*$", re.MULTILINE)
 NODE_RE = re.compile(r"^## \[([A-Z][A-Z0-9-]*)\]\s+.+$", re.MULTILINE)
@@ -104,14 +106,19 @@ def _validate_path(value: Any, spec: dict[str, Any], reason_code: Any) -> list[s
     return errors
 
 
-def validate_payload(payload: Any) -> list[str]:
+def validate_payload(payload: Any, *, require_summary: bool = False) -> list[str]:
     errors: list[str] = []
     if not isinstance(payload, dict):
         return ["root value must be a JSON object"]
 
     actual_keys = set(payload)
-    if actual_keys != EXPECTED_KEYS:
-        errors.append("keys must be exactly " + ", ".join(sorted(EXPECTED_KEYS)))
+    if not REQUIRED_KEYS.issubset(actual_keys) or not actual_keys.issubset(EXPECTED_KEYS):
+        errors.append(
+            "keys must contain the v2 fields and optional summary only: "
+            + ", ".join(sorted(EXPECTED_KEYS))
+        )
+    if require_summary and "summary" not in payload:
+        errors.append("summary is required for newly generated v2 labels")
 
     spec = load_tree_spec()
     if payload.get("schema_version") != SCHEMA_VERSION:
@@ -135,6 +142,13 @@ def validate_payload(payload: Any) -> list[str]:
     reason = payload.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         errors.append("reason must be a non-empty article-specific explanation")
+
+    summary = payload.get("summary")
+    if "summary" in payload:
+        if not isinstance(summary, str) or not summary.strip():
+            errors.append("summary must be a non-empty factual article summary")
+        elif len(summary.strip()) > SUMMARY_MAX_CHARS:
+            errors.append(f"summary must be at most {SUMMARY_MAX_CHARS} characters")
 
     evidence = payload.get("evidence")
     evidence_types: set[str] = set()
@@ -189,4 +203,3 @@ def read_label(path: Path) -> tuple[dict[str, Any] | None, list[str]]:
         return None, [f"cannot read valid JSON: {exc}"]
     errors = validate_payload(payload)
     return (payload if not errors else None), errors
-

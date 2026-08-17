@@ -29,6 +29,7 @@ def keep_payload() -> dict:
         ],
         "reason_code": "K1",
         "reason": "文章开放科研项目申报，任务直接要求研发多模态大模型。",
+        "summary": "文章发布大模型科研项目申报通知，说明申报期限和多模态大模型研究任务。",
         "evidence": [
             {"type": "solicitation", "text": "请于8月30日前提交申报材料", "location": "申报要求"},
             {"type": "domain", "text": "研发多模态大模型训练方法", "location": "研究内容"},
@@ -162,6 +163,19 @@ class LabelingRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(json.loads(label_path.read_text(encoding="utf-8")), legacy)
 
+    async def test_existing_v2_without_summary_is_upgraded(self) -> None:
+        existing = keep_payload()
+        existing.pop("summary")
+        (self.article_dir / "label.json").write_text(
+            json.dumps(existing, ensure_ascii=False), encoding="utf-8"
+        )
+        model = FakeModel([keep_payload()])
+        result = await run_labeling([self.article_dir], model, concurrency=1, max_retries=0)
+        self.assertEqual(result["labeled"], 1)
+        upgraded, errors = read_label(self.article_dir / "label.json")
+        self.assertEqual(errors, [])
+        self.assertTrue(upgraded["summary"])
+
     def test_run_scope_uses_python_selector_candidates(self) -> None:
         record_root = Path(self.temp_dir.name) / "record"
         run_dir = record_root / "2026_08_16_12_00_00"
@@ -184,6 +198,32 @@ class LabelingRunnerTest(unittest.IsolatedAsyncioTestCase):
         command = mocked.call_args.args[0]
         self.assertIn("candidates", command)
         self.assertEqual(command[-1], str(run_dir.resolve()))
+
+    def test_run_scope_reads_compact_selector_details_file(self) -> None:
+        record_root = Path(self.temp_dir.name) / "record"
+        run_dir = record_root / "2026_08_16_12_00_01"
+        run_dir.mkdir(parents=True)
+        (run_dir / "article_details.csv").write_text(
+            "公众号名称,爬取的文章名称,文章发布时间\n", encoding="utf-8"
+        )
+        details_path = run_dir / "candidate_inventory.json"
+        details_path.write_text(
+            json.dumps({"count": 1, "articles": [{"article_dir": str(self.article_dir)}]}),
+            encoding="utf-8",
+        )
+        stdout = json.dumps(
+            {"status": "ok", "command": "candidates", "count": 1, "details_file": str(details_path)}
+        )
+        with patch(
+            "src.labeling.runner.subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+        ):
+            result = discover_run_article_dirs(
+                run_dir,
+                record_root=record_root,
+                articles_root=Path(self.temp_dir.name),
+            )
+        self.assertEqual(result, [self.article_dir.resolve()])
 
 
 if __name__ == "__main__":

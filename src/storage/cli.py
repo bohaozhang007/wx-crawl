@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,7 +30,7 @@ LOG_PATH_NAME = "article_label_export.log"
 LOGGER = logging.getLogger("article-label-export")
 
 
-def setup_logging(log_dir: Path | None = None) -> None:
+def setup_logging(log_dir: Path | None = None, verbose: bool = False) -> None:
     LOGGER.setLevel(logging.INFO)
     for handler in LOGGER.handlers:
         handler.close()
@@ -36,9 +38,10 @@ def setup_logging(log_dir: Path | None = None) -> None:
     LOGGER.propagate = False
 
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(formatter)
-    LOGGER.addHandler(console)
+    if verbose:
+        console = logging.StreamHandler(sys.stderr)
+        console.setFormatter(formatter)
+        LOGGER.addHandler(console)
 
     if log_dir is None:
         return
@@ -83,8 +86,36 @@ def report_path(run_dir: Path, raw: str | None) -> Path:
     return path
 
 
-def output(value: object) -> None:
-    print(json.dumps(value, ensure_ascii=False, indent=2))
+def output(value: object, verbose: bool = False) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2 if verbose else None))
+
+
+def write_details(path: Path, value: object) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+    return path
+
+
+def add_verbose(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--verbose", action="store_true", help="show detailed logs and JSON")
+
+
+def transient_details_path(name: str) -> Path:
+    return RECORD_ROOT / ".cli" / f"{name}_{time.time_ns()}.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,13 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="SQLite database path")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("init", help="initialize the SQLite database")
+    init = subparsers.add_parser("init", help="initialize the SQLite database")
+    add_verbose(init)
 
     ingest = subparsers.add_parser("ingest", help="import a filtered_articles.json report")
     ingest.add_argument("--run-dir")
     ingest.add_argument("--report")
     ingest.add_argument("--prune", action="store_true", help="preview explicit DROP current-run articles")
     ingest.add_argument("--confirm-delete", action="store_true", help="actually delete explicit DROP article directories")
+    add_verbose(ingest)
 
     listing = subparsers.add_parser("list", help="list stored articles as JSON")
     listing.add_argument("--domain", choices=DOMAINS)
@@ -109,24 +142,29 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--channel")
     listing.add_argument("--pending-only", action="store_true")
     listing.add_argument("--json", action="store_true", help="kept for explicit machine-readable output")
+    add_verbose(listing)
 
     pending = subparsers.add_parser("pending-delivery", help="list articles pending delivery")
     pending.add_argument("--channel", required=True)
     pending.add_argument("--limit", type=int, default=100)
     pending.add_argument("--json", action="store_true", help="kept for explicit machine-readable output")
+    add_verbose(pending)
 
     delivered = subparsers.add_parser("mark-delivered", help="mark articles as delivered")
     delivered.add_argument("--channel", required=True)
     delivered.add_argument("--id", type=int, action="append", required=True)
     delivered.add_argument("--response", default="")
+    add_verbose(delivered)
 
     prune = subparsers.add_parser("prune", help="preview or delete explicit DROP current-run articles")
     prune.add_argument("--run-dir")
     prune.add_argument("--report")
     prune.add_argument("--all-unselected", action="store_true", help="scan all article directories, not just one run")
     prune.add_argument("--confirm-delete", action="store_true")
+    add_verbose(prune)
 
-    subparsers.add_parser("stats", help="show database statistics")
+    stats_parser = subparsers.add_parser("stats", help="show database statistics")
+    add_verbose(stats_parser)
     return parser
 
 
@@ -139,38 +177,70 @@ def main() -> None:
             run_dir_for_log = resolve_run_dir(args.run_dir)
         except StorageError:
             run_dir_for_log = None
-    setup_logging(run_dir_for_log)
+    setup_logging(run_dir_for_log, args.verbose)
     started = time.monotonic()
     LOGGER.info("开始执行 wx-crawl-db command=%s db=%s", args.command, Path(args.db).resolve())
     try:
         if args.command == "init":
             init_database(args.db)
-            output({"database": str(args.db.resolve()), "initialized": True})
+            output({"status": "ok", "command": "init", "database": str(args.db.resolve()), "initialized": True}, args.verbose)
         elif args.command == "ingest":
             run_dir = run_dir_for_log or resolve_run_dir(args.run_dir)
             LOGGER.info("开始导入命令 run_dir=%s", run_dir)
             report = report_path(run_dir, args.report)
             result = import_report(report, args.db)
             if args.prune:
-                result["prune"] = prune_run(run_dir, report, args.confirm_delete, args.db)
-            output(result)
+                prune_result = prune_run(run_dir, report, args.confirm_delete, args.db)
+                details_path = write_details(run_dir / "cleanup_result.json", prune_result)
+                result["prune"] = prune_result if args.verbose else {
+                    "confirmed": bool(prune_result.get("confirmed")),
+                    "deleted": int(prune_result.get("deleted", 0) or 0),
+                    "would_delete": len(prune_result.get("would_delete", [])),
+                    "protected_count": len(prune_result.get("protected", [])),
+                    "details_file": str(details_path),
+                }
+            output({"status": "ok", "command": "ingest", **result}, args.verbose)
             LOGGER.info("导入命令完成 run_id=%s articles=%s", result.get("run_id"), result.get("articles"))
         elif args.command == "list":
-            output(query_articles(args.db, domain=args.domain, application_type=args.application_type, since=args.since, until=args.until, limit=args.limit, channel=args.channel, pending_only=args.pending_only))
+            result = query_articles(args.db, domain=args.domain, application_type=args.application_type, since=args.since, until=args.until, limit=args.limit, channel=args.channel, pending_only=args.pending_only)
+            if args.json or args.verbose:
+                output(result, args.verbose)
+            else:
+                path = write_details(transient_details_path("database_query_result"), result)
+                output({"status": "ok", "command": "list", "count": len(result), "details_file": str(path)})
         elif args.command == "pending-delivery":
-            output(query_articles(args.db, channel=args.channel, limit=args.limit, pending_only=True))
+            result = query_articles(args.db, channel=args.channel, limit=args.limit, pending_only=True)
+            if args.json or args.verbose:
+                output(result, args.verbose)
+            else:
+                path = write_details(transient_details_path("pending_delivery_result"), result)
+                output({"status": "ok", "command": "pending-delivery", "count": len(result), "details_file": str(path)})
         elif args.command == "mark-delivered":
-            output({"updated": mark_delivered(args.db, args.id, args.channel, args.response)})
+            output({"status": "ok", "command": "mark-delivered", "updated": mark_delivered(args.db, args.id, args.channel, args.response)}, args.verbose)
         elif args.command == "prune":
             if args.all_unselected:
-                output(prune_all_unselected(args.db, args.confirm_delete))
+                result = prune_all_unselected(args.db, args.confirm_delete)
+                details_path = write_details(transient_details_path("cleanup_all_unselected_result"), result)
             else:
                 run_dir = run_dir_for_log or resolve_run_dir(args.run_dir)
                 LOGGER.info("开始清理命令 run_dir=%s confirm=%s", run_dir, args.confirm_delete)
                 report = report_path(run_dir, args.report)
-                output(prune_run(run_dir, report, args.confirm_delete, args.db))
+                result = prune_run(run_dir, report, args.confirm_delete, args.db)
+                details_path = write_details(run_dir / "cleanup_result.json", result)
+            if args.verbose:
+                output(result, True)
+            else:
+                output({
+                    "status": "ok", "command": "prune",
+                    "confirmed": bool(result.get("confirmed")),
+                    "deleted": int(result.get("deleted", 0) or 0),
+                    "would_delete": len(result.get("would_delete", [])),
+                    "protected_count": len(result.get("protected", [])),
+                    "skipped_count": len(result.get("skipped", [])),
+                    "details_file": str(details_path),
+                })
         elif args.command == "stats":
-            output(stats(args.db))
+            output({"status": "ok", "command": "stats", **stats(args.db)}, args.verbose)
     except (StorageError, OSError) as exc:
         LOGGER.error("wx-crawl-db 执行失败 command=%s error=%s", args.command, exc)
         parser.error(str(exc))

@@ -53,14 +53,14 @@ to choose another filename within the same run directory.
 
 `待打标` means `label.json` is missing or invalid, `待人工复核` means its
 decision is REVIEW, `已打标但未入选` means its decision is DROP, `待摘要`
-means it is KEEP but has no summary yet, and `已筛选` means it is KEEP and
-selected. The run-level files
+means a legacy summary-less v2 KEEP has no fallback summary yet, and `已筛选`
+means it is KEEP with a model-generated or migrated summary. The run-level files
 `article_summaries.json` and `filtered_articles.json` show whether those stages
 were written. Database import is verified separately from the JSON result of
 `wx-crawl-db ingest`.
 
 Every `select_articles.py` command and the `wx-crawl-db ingest` / `prune`
-commands emit progress logs to stderr and append them to this run file:
+command writes progress logs to this run file:
 
 ```text
 /root/workspace/wx-crawl/results/record/<timestamp>/article_label_export.log
@@ -68,7 +68,9 @@ commands emit progress logs to stderr and append them to this run file:
 
 Use that log to judge execution progress across candidate matching, label
 filtering, summary/report writing, database import, and current-run cleanup.
-Keep stdout machine-readable JSON for command results.
+Default stdout is one compact machine-readable JSON summary with counts and a
+`details_file` path. Add `--verbose` only for an explicit human diagnosis; it
+shows progress and detailed JSON and should not be used by normal Agent automation.
 
 When several crawl runs are waiting for processing, inspect each run explicitly
 and process them independently. For example, to inspect the three newest runs:
@@ -107,11 +109,17 @@ python3 /root/workspace/wx-crawl/skill/article-label-export/scripts/select_artic
   --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>"
 ```
 
-For every returned article directory, run the labeling workflow completely:
-read all text to EOF, but do not open or inspect images, video, audio, or other
-binary assets. Write its validated `label.json` with the second skill's writer.
-Do not label from the title or grep alone. Do not use the second skill's
-all-history loop unless the user explicitly asks for a backfill.
+Label the exact run with one API-backed Python process:
+
+```bash
+/root/workspace/wx-crawl/.venv/bin/python -m src.labeling.cli \
+  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>"
+```
+
+The Python runner reads every article to EOF, calls the model, validates evidence,
+and atomically writes the v2 decision and summary together. Do not replace it with
+an Agent-side per-article loop. Do not use the all-history scope unless the user
+explicitly asks for a backfill.
 
 ## 2. Execute the label decision
 
@@ -132,11 +140,10 @@ and the required evidence.
 
 ## 3. Persist the filtered report
 
-For every selected article, read enough of its complete textual `content.txt` and
-textual metadata to write a factual, concise summary of 1-3 sentences. Do not
-open or inspect any image or other media while summarizing.
-Do not invent details from the title or labels. First save the summaries as a
-JSON object keyed by the article URL at:
+Do not ask the Agent to summarize selected articles. The API-backed labeler already
+generates a factual `summary` for every article in the same call that creates its v2
+decision. The report writer reads the KEEP labels directly and materializes a
+compatibility JSON object keyed by URL at:
 
 ```text
 /root/workspace/wx-crawl/results/record/<timestamp>/article_summaries.json
@@ -150,16 +157,18 @@ Example:
 }
 ```
 
-Then generate the validated machine-readable report:
+For an older summary-less v2 label only, an existing `article_summaries.json` may be
+used as a migration fallback. New runs must not depend on an Agent-generated summary
+file. Generate the validated machine-readable report directly:
 
 ```bash
 python3 /root/workspace/wx-crawl/skill/article-label-export/scripts/select_articles.py write-report \
-  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>" \
-  --summaries "/root/workspace/wx-crawl/results/record/<timestamp>/article_summaries.json"
+  --run-dir "/root/workspace/wx-crawl/results/record/<timestamp>"
 ```
 
-The command writes `filtered_articles.json` in the run directory. It fails if a
-selected article has no summary, an invalid label, or a missing URL. This file
+The command writes both normalized `article_summaries.json` and
+`filtered_articles.json` in the run directory. It fails if a selected article has no
+label/fallback summary, an invalid label, or a missing URL. This file
 is the source of truth for database import and must be generated before any
 cleanup.
 

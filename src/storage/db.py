@@ -414,6 +414,14 @@ def run_selector(run_dir: Path, command: str) -> dict[str, Any]:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise StorageError(f"selector returned invalid JSON: {exc}") from exc
+    details_file = payload.get("details_file") if isinstance(payload, dict) else None
+    if isinstance(details_file, str):
+        try:
+            payload = json.loads(Path(details_file).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StorageError(
+                f"cannot read selector details for {command}: {details_file}: {exc}"
+            ) from exc
     LOGGER.info("选择脚本调用完成 command=%s run_dir=%s", command, run_dir)
     return payload
 

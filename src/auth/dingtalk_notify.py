@@ -71,3 +71,29 @@ def send_auth_status(status: str, detail: str = "") -> None:
     message = messages.get(status, f"微信公众号认证状态更新：{status}")
     if detail: message += f"\n详情：{detail}"
     _send_text(message)
+
+
+def crawl_status_message(payload: dict[str, object]) -> str:
+    """Build the compact no-agent crawl notification without exposing secrets."""
+    status = str(payload.get("status") or "failed")
+    run_id = str(payload.get("run_id") or "-")
+    if status == "ok":
+        duration = float(payload.get("duration_seconds") or 0) / 60
+        return (
+            "✅ 微信公众号定时爬取完成"
+            f"\n运行：{run_id}"
+            f"\n公众号：{int(payload.get('account_count') or 0)} 个"
+            f"\n新增文章：{int(payload.get('new_article_count') or 0)} 篇"
+            f"\n耗时：{duration:.1f} 分钟"
+            f"\n记录：{payload.get('record_dir') or '-'}"
+        )
+    if status == "interrupted":
+        title = "⏹️ 微信公众号定时爬取已中断"
+    else:
+        title = "❌ 微信公众号定时爬取失败"
+    error = str(payload.get("error") or "未知错误").replace("\n", " ")[:500]
+    return f"{title}\n运行：{run_id}\n原因：{error}"
+
+
+def send_crawl_status(payload: dict[str, object]) -> None:
+    _send_text(crawl_status_message(payload))

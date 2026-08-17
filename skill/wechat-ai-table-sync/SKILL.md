@@ -1,10 +1,7 @@
 ---
 name: wechat-ai-table-sync
 description: Sync WeChat article records into a DingTalk AI table.
-version: 0.1.0
-author: 杨东霖, Hermes Agent
 license: MIT
-platforms: [linux]
 metadata:
   hermes:
     tags: [WeChat, DingTalk, AI Table, SQLite, Sync]
@@ -107,16 +104,16 @@ for a controlled test or another authorized table.
 
 ## Scheduling
 
-Create a durable Hermes cron job only after a manual crawl, label/export, import,
-and sync have each succeeded:
+Scheduled crawling is already owned by Hermes native no-agent script jobs; never add crawling
+to an Agent cron prompt. If a nightly Hermes job is needed for downstream processing,
+make it invoke the deterministic pending-batch entry point once:
 
 ```text
-cronjob(action="create", schedule="0 22 * * *", name="wechat-article-label-filter-export-pipeline", skills=["wechat-official-account-crawler", "label-wechat-articles", "article-label-export", "wechat-article-database", "wechat-ai-table-sync"], workdir="/root/workspace/wx-crawl", enabled_toolsets=["terminal", "file", "vision"], prompt="Run the nightly WeChat pipeline. The crawl is optional: attempt the existing-registry incremental crawl through wechat-crawl. If a QR login is requested, deliver it and wait at most 5 minutes; if login is still incomplete, record an authentication-timeout warning, gracefully stop or abandon the unfinished crawl according to wechat-crawl rules, and continue. Do not treat that failed/interrupted run as successful input. Resolve completed run directories under results/record that contain article_details.csv; inspect each with python3 skill/article-label-export/scripts/select_articles.py status --run-dir <run-dir>, then process every pending successful run oldest first using article-label-export. For each run, enumerate only its candidates, read all textual content to EOF without opening media, write valid label.json files using label-wechat-articles, generate article_summaries.json and filtered_articles.json, run wx-crawl-db ingest --run-dir <run-dir>, verify the import JSON, and only then run wx-crawl-db prune --run-dir <run-dir> --confirm-delete. Do not use implicit newest-run selection while catching up multiple runs. After all successful imports, run python3 skill/wechat-ai-table-sync/scripts/sync_articles.py --mode incremental and verify its JSON counts and readback. Crawl/authentication timeout is a warning; labeling, import, and sync failures must be reported as errors. Deliver verified JSON counts, processed run IDs, skipped/unreadable paths, authentication warnings, and errors.")
+cronjob(action="create", schedule="0 22 * * *", name="wechat-article-label-filter-export-pipeline", skills=["wechat-pipeline-orchestration"], workdir="/root/workspace/wx-crawl", enabled_toolsets=["terminal"], prompt="Do not authenticate or crawl. Run /root/workspace/wx-crawl/.venv/bin/python /root/workspace/wx-crawl/skill/wechat-pipeline-orchestration/scripts/process_pending_batches.py exactly once, wait for completion, and report only its compact JSON summary or terminal error.")
 ```
 
-A scheduled job must not claim success when the crawl is blocked by login or the
-sync API fails. The job should run the crawler's existing shared-task locks and
-never start a duplicate crawl.
+The Python entry point owns labeling, deterministic selection, report generation,
+database import/prune, and sync. Do not repeat those stages in the Agent.
 
 ## Verification
 

@@ -12,6 +12,9 @@ spec.loader.exec_module(mod)
 
 assert mod.RECORD == ROOT / 'results/record'
 assert not hasattr(mod, 'RECORD_ROOT')
+source = SCRIPT.read_text(encoding='utf-8')
+assert '"--summaries"' not in source
+assert 'Agent-side per-article summary' in source
 run_dir = ROOT / 'results/record/2026_08_15_01_13_13'
 original_status_json = mod.status_json
 mod.status_json = lambda _: {'pending_label_count': 1}
