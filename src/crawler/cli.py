@@ -1495,6 +1495,29 @@ def emit_final_result(
     emit_json(payload)
 
 
+def label_new_batch(record_dir: Path, logger: logging.Logger) -> dict[str, object]:
+    """Label a completed crawl batch directly; failures remain retryable downstream."""
+    python = ROOT / ".venv" / "bin" / "python"
+    if not python.is_file():
+        return {"status": "failed", "failed": 1, "error": f"解释器不存在：{python}"}
+    completed = subprocess.run(
+        [str(python), "-m", "src.labeling.cli", "--run-dir", str(record_dir)],
+        cwd=ROOT, text=True, capture_output=True,
+    )
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            if completed.returncode:
+                logger.warning("新增文章即时打标未完全成功，将由后续流水线重试：%s", payload)
+            return payload
+    error = " ".join(completed.stderr.splitlines()[-5:])[:500]
+    logger.warning("新增文章即时打标未返回 JSON，将由后续流水线重试：%s", error)
+    return {"status": "failed", "failed": 1, "error": error or "未返回 JSON"}
+
+
 def preflight(config: CrawlConfig) -> list[str]:
     if not config.input_csv.exists():
         raise RuntimeError(f"输入 CSV 不存在：{config.input_csv}")
@@ -1608,6 +1631,9 @@ def main() -> None:
                 logger.error("无法保存结果统计 CSV：%s", exc)
                 if not final_error:
                     final_error = f"无法保存结果统计 CSV：{exc}"
+            immediate_labeling = None
+            if final_status == "成功" and saved_record_dir is not None:
+                immediate_labeling = label_new_batch(saved_record_dir, logger)
             emit_final_result(
                 {
                     "status": {"成功": "ok", "已中断": "interrupted"}.get(final_status, "failed"),
@@ -1622,6 +1648,7 @@ def main() -> None:
                     "summary_file": str(summary_path) if summary_path else None,
                     "details_file": str((saved_record_dir / "account_summary.csv")) if saved_record_dir else None,
                     "error": final_error or None,
+                    "immediate_labeling": immediate_labeling,
                 },
                 notify=args.notify,
                 logger=logger,

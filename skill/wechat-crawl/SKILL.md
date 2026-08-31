@@ -38,6 +38,13 @@ Normal stdout is one compact JSON object. Use `--verbose` only for a requested h
 diagnosis. Launch the command once; do not reproduce its authentication state machine,
 poll its subprocess from the Agent, or re-check output files after `status=ok`.
 
+After a successful batch is recorded, the crawler immediately invokes the Python V2
+labeler for that batch. The same model response produces the decision, summary,
+deadline, and high/medium/low importance. High-importance KEEP articles are sent
+directly to DingTalk with the configured person mentioned. Alert delivery is idempotent;
+labeling or notification failures remain retryable by the downstream pipeline and do
+not invalidate an otherwise successful crawl archive.
+
 ## Authentication
 
 Authentication is program-owned. The crawler starts `wechat-mp-tools`, reuses saved

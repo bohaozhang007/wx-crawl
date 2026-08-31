@@ -42,7 +42,14 @@ attachments:
 deadline_reminder:
   # 仅对打标确认的明确截止时间创建提醒；模糊或缺失时间不会调度。
   enabled: true
-  days_before: 7
+  days_before: 14
   timezone: Asia/Shanghai
   retry_minutes: 30
   max_attempts: 3
+
+importance_alert:
+  # 每批新增文章打标后，立即在钉钉群中提醒高重要度文章。
+  enabled: true
+  mention_user_ids:
+    # 由钉钉通讯录接口根据钉钉号 il3fb51 解析出的应用内部 userId。
+    - "171036101939908716"

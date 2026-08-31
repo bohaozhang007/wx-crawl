@@ -26,13 +26,13 @@ def _settings():
     return cfg.get("gateway", {}).get("platforms", {}).get("dingtalk", {}).get("extra", {}) or {}
 
 
-def _send_text(content: str) -> None:
+def _send_text(content: str, mention_user_ids: list[str] | None = None) -> None:
     import requests
     extra = _settings()
     webhook = str(extra.get("webhook_url") or "")
     if not webhook:
         raise RuntimeError("DingTalk webhook_url is not configured")
-    ids = extra.get("cron_mention_user_ids") or ["021616681719-1773375672", "2669682637-288741163"]
+    ids = mention_user_ids or extra.get("cron_mention_user_ids") or ["021616681719-1773375672", "2669682637-288741163"]
     response = requests.post(webhook, json={
         "msgtype": "text",
         "text": {"content": content},
@@ -158,4 +158,22 @@ def send_deadline_reminders(items: list[dict]) -> str:
         ])
     message = "\n".join(lines).rstrip()
     _send_text(message)
+    return "sent"
+
+
+def send_high_importance_alert(item: dict, mention_user_ids: list[str]) -> str:
+    deadline = item.get("deadline_text") or "未明确"
+    amount = item.get("amount_text") or "未公开"
+    message = (
+        "🔴 高重要度科研机会"
+        f"\n文章：{item.get('title') or '-'}"
+        f"\n公众号：{item.get('account_name') or '-'}"
+        f"\n截止时间：{deadline}"
+        f"\n项目金额：{amount}"
+        f"\n符合方向：{item.get('domains') or '-'}"
+        f"\n主要内容：{item.get('summary') or '-'}"
+        f"\n重要原因：{item.get('reason') or '-'}"
+        f"\n原文：{item.get('url') or '-'}"
+    )
+    _send_text(message, mention_user_ids=mention_user_ids)
     return "sent"

@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS articles (
     deadline_status TEXT NOT NULL DEFAULT 'missing',
     deadline_text TEXT NOT NULL DEFAULT '',
     deadline_at INTEGER,
+    importance_level TEXT NOT NULL DEFAULT 'low',
+    importance_reason TEXT NOT NULL DEFAULT '',
+    importance_factors_json TEXT NOT NULL DEFAULT '{}',
     attachments_json TEXT NOT NULL DEFAULT '[]',
     crawl_run TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -123,6 +126,9 @@ def init_database(db_path: Path = DEFAULT_DB_PATH) -> None:
             "deadline_text": "TEXT NOT NULL DEFAULT ''",
             "deadline_at": "INTEGER",
             "attachments_json": "TEXT NOT NULL DEFAULT '[]'",
+            "importance_level": "TEXT NOT NULL DEFAULT 'low'",
+            "importance_reason": "TEXT NOT NULL DEFAULT ''",
+            "importance_factors_json": "TEXT NOT NULL DEFAULT '{}'",
         }.items():
             if name not in columns:
                 connection.execute(f"ALTER TABLE articles ADD COLUMN {name} {definition}")
@@ -257,6 +263,14 @@ def validate_article(item: Any) -> dict[str, Any]:
         raise StorageError(f"invalid deadline status for {url}: {deadline_status}")
     if deadline_at is not None:
         deadline_at = int(deadline_at)
+    importance = item.get("importance") or {}
+    importance_level = str(importance.get("level") or "")
+    if importance_level not in {"high", "medium", "low"}:
+        raise StorageError(f"invalid importance level for {url}: {importance_level}")
+    importance_reason = str(importance.get("reason") or "").strip()
+    importance_factors = importance.get("factors")
+    if not importance_reason or not isinstance(importance_factors, dict):
+        raise StorageError(f"importance reason and factors are required for {url}")
     account_name, account_id = account_details(article_dir)
     publish_time = item.get("publish_time") or metadata_value.get("publish_time") or 0
     try:
@@ -278,6 +292,9 @@ def validate_article(item: Any) -> dict[str, Any]:
         "deadline_status": deadline_status,
         "deadline_text": deadline_text,
         "deadline_at": deadline_at,
+        "importance_level": importance_level,
+        "importance_reason": importance_reason,
+        "importance_factors": importance_factors,
         "attachments": article_attachments(article_dir),
     }
 
@@ -319,8 +336,9 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                     url, title, account_name, account_id, publish_time,
                     application_type, domains_json, summary, content_text,
                     cover_url, deadline_status, deadline_text, deadline_at,
+                    importance_level, importance_reason, importance_factors_json,
                     attachments_json, crawl_run, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(url) DO UPDATE SET
                     title=excluded.title,
                     account_name=excluded.account_name,
@@ -334,6 +352,9 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                     deadline_status=excluded.deadline_status,
                     deadline_text=excluded.deadline_text,
                     deadline_at=excluded.deadline_at,
+                    importance_level=excluded.importance_level,
+                    importance_reason=excluded.importance_reason,
+                    importance_factors_json=excluded.importance_factors_json,
                     attachments_json=excluded.attachments_json,
                     crawl_run=excluded.crawl_run,
                     updated_at=excluded.updated_at""",
@@ -351,6 +372,9 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                     article["deadline_status"],
                     article["deadline_text"],
                     article["deadline_at"],
+                    article["importance_level"],
+                    article["importance_reason"],
+                    json.dumps(article["importance_factors"], ensure_ascii=False),
                     json.dumps(article["attachments"], ensure_ascii=False),
                     run_id,
                     now,
@@ -432,6 +456,7 @@ def query_articles(
         try:
             item["domains"] = json.loads(item.pop("domains_json"))
             item["attachments"] = json.loads(item.pop("attachments_json"))
+            item["importance_factors"] = json.loads(item.pop("importance_factors_json"))
         except (TypeError, json.JSONDecodeError) as exc:
             raise StorageError(f"invalid domains_json for article {item.get('id')}") from exc
         result.append(item)

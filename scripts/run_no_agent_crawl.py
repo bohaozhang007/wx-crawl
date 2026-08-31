@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "run.sh"
+PYTHON = ROOT / ".venv" / "bin" / "python"
 
 
 def last_json_object(output: str) -> dict[str, object] | None:
@@ -22,7 +23,7 @@ def last_json_object(output: str) -> dict[str, object] | None:
     return None
 
 
-def delivery_message(payload: dict[str, object], returncode: int) -> str:
+def delivery_message(payload: dict[str, object], returncode: int, label: dict[str, object] | None = None) -> str:
     status = str(payload.get("status") or "failed")
     if payload.get("command") == "check" and status == "ok":
         return (
@@ -33,7 +34,7 @@ def delivery_message(payload: dict[str, object], returncode: int) -> str:
         )
     if returncode == 0 and status == "ok":
         duration = float(payload.get("duration_seconds") or 0) / 60
-        return (
+        message = (
             "✅ 微信公众号 no-agent 爬取完成"
             f"\n运行：{payload.get('run_id') or '-'}"
             f"\n公众号：{int(payload.get('account_count') or 0)} 个"
@@ -41,6 +42,15 @@ def delivery_message(payload: dict[str, object], returncode: int) -> str:
             f"\n耗时：{duration:.1f} 分钟"
             f"\n记录：{payload.get('record_dir') or '-'}"
         )
+        if label is not None:
+            marker = "⚠️" if int(label.get("failed") or 0) else "✅"
+            message += (
+                f"\n{marker} 新增文章即时打标：{int(label.get('labeled') or 0)} 篇"
+                f"，失败 {int(label.get('failed') or 0)} 篇"
+                f"；高重要度 {int(label.get('high_importance') or 0)} 篇"
+                f"，已提醒 {int(label.get('importance_alerts_sent') or 0)} 篇"
+            )
+        return message
     title = "⏹️ 微信公众号 no-agent 爬取已中断" if status == "interrupted" else "❌ 微信公众号 no-agent 爬取失败"
     error = str(payload.get("error") or f"进程退出码 {returncode}").replace("\n", " ")[:500]
     return f"{title}\n运行：{payload.get('run_id') or '-'}\n原因：{error}"
@@ -58,7 +68,16 @@ def main() -> int:
     if payload is None:
         tail = " ".join(result.stderr.splitlines()[-5:])[:500]
         payload = {"status": "failed", "error": tail or "爬虫未返回 JSON 结果"}
-    print(delivery_message(payload, result.returncode), flush=True)
+    label_payload = payload.get("immediate_labeling") if isinstance(payload.get("immediate_labeling"), dict) else None
+    if not args.check and result.returncode == 0 and payload.get("status") == "ok" and payload.get("record_dir") and label_payload is None:
+        labeled = subprocess.run(
+            [str(PYTHON), "-m", "src.labeling.cli", "--run-dir", str(payload["record_dir"])],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        label_payload = last_json_object(labeled.stdout)
+        if label_payload is None:
+            label_payload = {"failed": 1, "error": "即时打标未返回 JSON"}
+    print(delivery_message(payload, result.returncode, label_payload), flush=True)
     return result.returncode
 
 

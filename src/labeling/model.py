@@ -27,6 +27,24 @@ class DeadlineOutput(BaseModel):
     timezone: Literal["Asia/Shanghai"]
 
 
+class ImportanceFactorsOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deadline_urgency: Literal["high", "medium", "low", "unknown"]
+    project_significance: Literal["high", "medium", "low", "unknown"]
+    amount_level: Literal["high", "medium", "low", "unknown"]
+    amount_raw_text: str
+    domain_fit: Literal["strong", "medium", "weak", "none"]
+
+
+class ImportanceOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["high", "medium", "low", "not_applicable"]
+    reason: str = Field(min_length=1, max_length=500)
+    factors: ImportanceFactorsOutput
+
+
 class LabelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -38,6 +56,7 @@ class LabelOutput(BaseModel):
     reason: str
     summary: str = Field(min_length=1, max_length=500)
     deadline: DeadlineOutput
+    importance: ImportanceOutput
     evidence: list[EvidenceOutput]
     application_type: Literal["科研项目申请", "科研指南申请", "都不是"]
     domains: list[Literal["无人机", "具身智能", "大模型", "空天", "机器人", "机械臂"]]

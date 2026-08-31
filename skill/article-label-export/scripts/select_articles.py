@@ -213,6 +213,8 @@ def valid_label(article_dir: Path) -> tuple[dict[str, Any] | None, str | None]:
         return None, "; ".join(errors)
     if label is not None and "deadline" not in label:
         return None, "label.json is missing structured deadline"
+    if label is not None and "importance" not in label:
+        return None, "label.json is missing structured importance"
     return label, None
 
 
@@ -236,6 +238,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
             "reason_code": label["reason_code"] if label else None,
             "reason": label["reason"] if label else reason,
             "summary": label.get("summary") if label else None,
+            "importance": label.get("importance") if label else None,
             "evidence": list(label["evidence"]) if label else None,
         }
         if reason:
@@ -281,6 +284,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
                 "reason": label["reason"],
                 "summary": label.get("summary", ""),
                 "deadline": label.get("deadline"),
+                "importance": label.get("importance"),
                 "evidence": label["evidence"],
                 "application_type": label["application_type"],
                 "domains": label["domains"],

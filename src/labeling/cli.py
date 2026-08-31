@@ -21,6 +21,7 @@ from .runner import (
     run_labeling,
 )
 from .schema import load_tree_spec
+from .importance_alerts import notify_high_importance
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +180,8 @@ def main() -> int:
         result["api_style"] = config.api_style
         result["config_source"] = config.source
         result["run_dir"] = str(resolved_run) if resolved_run else None
+        alert_result = notify_high_importance(article_dirs)
+        result["importance_alerts"] = alert_result
         details_path = write_details(result, resolved_run)
         usage_path = write_usage(result, resolved_run)
         summary = {
@@ -189,6 +192,9 @@ def main() -> int:
             "labeled": result["labeled"],
             "failed": result["failed"],
             "skipped_valid": result["skipped_valid"],
+            "high_importance": alert_result["high"],
+            "importance_alerts_sent": alert_result["sent"],
+            "importance_alerts_failed": alert_result["failed"],
             "details_file": str(details_path),
         }
         emit(result if args.verbose else summary, verbose=args.verbose)

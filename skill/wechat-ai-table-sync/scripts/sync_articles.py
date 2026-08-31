@@ -15,7 +15,7 @@ DEFAULT_DB = REPO / "results" / "articles.sqlite3"
 BASE_ID = "P0MALyR8kNpXlRO7FYXjkO4bJ3bzYmDO"
 SHEET_ID = "0md26ggk3sgnjzj22zp3e"
 OPERATOR_UNION_ID = "nH3HfDiPL40MDE9MAPN5BZQiEiE"
-TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "attachments")
+TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "importance_level", "importance_reason", "importance_factors", "attachments")
 
 
 def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
@@ -51,6 +51,9 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
         "content_text": str(row.get("content_text", "")),
         "deadline_at": deadline_text_value,
         "deadline_text": str(row.get("deadline_text", "")),
+        "importance_level": str(row.get("importance_level", "")),
+        "importance_reason": str(row.get("importance_reason", "")),
+        "importance_factors": json.dumps(row.get("importance_factors") or {}, ensure_ascii=False),
         "attachments": attachment_links,
     }
 

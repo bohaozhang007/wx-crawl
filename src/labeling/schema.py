@@ -29,7 +29,7 @@ REQUIRED_KEYS = {
     "application_type",
     "domains",
 }
-EXPECTED_KEYS = REQUIRED_KEYS | {"summary", "deadline"}
+EXPECTED_KEYS = REQUIRED_KEYS | {"summary", "deadline", "importance"}
 
 TREE_VERSION_RE = re.compile(r"^Tree version: `([^`]+)`\s*$", re.MULTILINE)
 NODE_RE = re.compile(r"^## \[([A-Z][A-Z0-9-]*)\]\s+.+$", re.MULTILINE)
@@ -107,7 +107,8 @@ def _validate_path(value: Any, spec: dict[str, Any], reason_code: Any) -> list[s
 
 
 def validate_payload(
-    payload: Any, *, require_summary: bool = False, require_deadline: bool = False
+    payload: Any, *, require_summary: bool = False, require_deadline: bool = False,
+    require_importance: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(payload, dict):
@@ -123,6 +124,8 @@ def validate_payload(
         errors.append("summary is required for newly generated v2 labels")
     if require_deadline and "deadline" not in payload:
         errors.append("deadline is required for newly generated v2 labels")
+    if require_importance and "importance" not in payload:
+        errors.append("importance is required for newly generated v2 labels")
 
     spec = load_tree_spec()
     if payload.get("schema_version") != SCHEMA_VERSION:
@@ -225,6 +228,40 @@ def validate_payload(
             errors.append("KEEP requires at least one task-scope domain")
         if "solicitation" not in evidence_types or "domain" not in evidence_types:
             errors.append("KEEP evidence must include solicitation and domain entries")
+
+    importance = payload.get("importance")
+    if "importance" in payload:
+        factor_keys = {
+            "deadline_urgency", "project_significance", "amount_level",
+            "amount_raw_text", "domain_fit",
+        }
+        if not isinstance(importance, dict) or set(importance) != {"level", "reason", "factors"}:
+            errors.append("importance must contain exactly level, reason, and factors")
+        else:
+            level = importance.get("level")
+            if level not in {"high", "medium", "low", "not_applicable"}:
+                errors.append("importance.level is not allowed")
+            if decision == "KEEP" and level not in {"high", "medium", "low"}:
+                errors.append("KEEP requires a high, medium, or low importance level")
+            if decision != "KEEP" and level != "not_applicable":
+                errors.append("DROP and REVIEW require importance.level=not_applicable")
+            if not isinstance(importance.get("reason"), str) or not importance["reason"].strip():
+                errors.append("importance.reason must be a non-empty explanation")
+            factors = importance.get("factors")
+            if not isinstance(factors, dict) or set(factors) != factor_keys:
+                errors.append("importance.factors has invalid keys")
+            else:
+                allowed = {
+                    "deadline_urgency": {"high", "medium", "low", "unknown"},
+                    "project_significance": {"high", "medium", "low", "unknown"},
+                    "amount_level": {"high", "medium", "low", "unknown"},
+                    "domain_fit": {"strong", "medium", "weak", "none"},
+                }
+                for key, values in allowed.items():
+                    if factors.get(key) not in values:
+                        errors.append(f"importance.factors.{key} is not allowed")
+                if not isinstance(factors.get("amount_raw_text"), str):
+                    errors.append("importance.factors.amount_raw_text must be a string")
 
     return errors
 

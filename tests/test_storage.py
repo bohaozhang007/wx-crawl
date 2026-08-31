@@ -42,6 +42,17 @@ class StorageTest(unittest.TestCase):
                             "application_type": "科研项目申请",
                             "domains": ["具身智能", "机器人"],
                             "summary": "测试摘要",
+                            "importance": {
+                                "level": "high",
+                                "reason": "方向高度符合且属于重大项目。",
+                                "factors": {
+                                    "deadline_urgency": "unknown",
+                                    "project_significance": "high",
+                                    "amount_level": "unknown",
+                                    "amount_raw_text": "",
+                                    "domain_fit": "strong",
+                                },
+                            },
                         }
                     ],
                 },
@@ -67,6 +78,7 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["domains"], ["具身智能", "机器人"])
         self.assertEqual(rows[0]["content_text"], "正文内容")
+        self.assertEqual(rows[0]["importance_level"], "high")
 
     def test_delivery_state(self) -> None:
         db.import_report(self.report, self.database)

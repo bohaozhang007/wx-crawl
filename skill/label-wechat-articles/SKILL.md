@@ -35,8 +35,9 @@ structured response and quoted evidence, and atomically writes `label.json`.
      --run-dir /root/workspace/wx-crawl/results/record/<timestamp>
    ```
 
-Existing valid v2 labels that already contain `summary` and structured `deadline` are
-skipped. A valid v2 label without either field is upgraded through the same model call; v1 labels are unsupported
+Existing valid v2 labels that already contain `summary`, structured `deadline`, and
+`importance` are skipped. A valid v2 label missing any of these fields is upgraded
+through the same model call; v1 labels are unsupported
 and must be deleted rather than migrated in place. Use `--replace` only when the user
 explicitly requests relabeling. Do not proceed to selection when the result reports failures.
 The unscoped command labels every pending archive article and must not be used by the
@@ -159,6 +160,17 @@ Write exactly these v2 fields:
     "timestamp": null,
     "timezone": "Asia/Shanghai"
   },
+  "importance": {
+    "level": "not_applicable",
+    "reason": "文章不是当前开放申报的科研项目或指南，不评估项目重要度。",
+    "factors": {
+      "deadline_urgency": "unknown",
+      "project_significance": "unknown",
+      "amount_level": "unknown",
+      "amount_raw_text": "",
+      "domain_fit": "none"
+    }
+  },
   "evidence": [
     {
       "type": "negative",
@@ -180,6 +192,12 @@ The same response must generate `deadline`. Use `confirmed` only for an unambigu
 final applicant submission deadline and convert it to an Asia/Shanghai Unix timestamp.
 Use `ambiguous` with verbatim source text and a null timestamp when it cannot be converted,
 or `missing` when absent. Only confirmed deadlines are scheduled.
+
+The same response must also generate `importance`. Only KEEP articles use `high`,
+`medium`, or `low`; DROP and REVIEW use `not_applicable`. Apply the prompt's explicit
+deadline urgency, project significance, stated amount, and domain-fit rules. Preserve
+stated amount text verbatim and never infer an undisclosed amount. High alerts are sent
+by Python after the label is validated, not by the Agent.
 
 Use evidence types only from:
 

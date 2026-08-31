@@ -61,8 +61,10 @@ into the Agent when a summary and `details_file` are sufficient.
    By default, the command inherits the active Hermes provider, model, base URL,
    and provider key; do not request a duplicate labeling key when Hermes already
    has one. Run the same command with `--check` first to report the resolved source.
-   Require exit code zero and JSON `failed=0`. Existing v2 labels with summaries are
-   skipped; summary-less v2 labels are upgraded in the same model call. Delete v1
+   Require exit code zero and JSON `failed=0`. Existing v2 labels with summaries,
+   deadlines, and importance are skipped; incomplete v2 labels are upgraded in the
+   same model call. High-importance notifications are idempotent, so a downstream retry
+   cannot resend an already delivered alert. Delete v1
    labels rather than attempting to promote them.
    The pending-batch program makes one additional process-level labeling attempt when
    any articles fail; the second invocation skips valid labels and calls the model only
@@ -115,6 +117,7 @@ into the Agent when a summary and `details_file` are sufficient.
    `python -m src.reminders.cli dispatch` directly without an Agent, sends one grouped
    DingTalk message, records idempotent delivery state, retries bounded failures, and
    schedules the next exact reminder instead of polling daily.
+   The configured lead time is 14 days.
 
 The scheduled pending-batch program sends exactly one aggregate DingTalk notification
 after each high-level downstream stage finishes: labeling, selection/reporting, and
@@ -129,7 +132,8 @@ stage notifications; it reports only the final compact execution JSON.
 When the user requests only one stage, run only that stage and its required read-only
 precondition checks:
 
-- crawl: run `./run.sh` once; authentication and QR handling are internal; do not label automatically;
+- crawl: run `./run.sh` once; authentication and QR handling are internal; the crawler
+  immediately labels its newly recorded batch and sends high-importance alerts itself;
 - label: require a specific `run_dir`, run the Python labeler, then report its counts;
 - select: require zero pending labels, run `matches`, and report the ledger path;
 - report/import: require validated matches and complete summaries before writing/importing;

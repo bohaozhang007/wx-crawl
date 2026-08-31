@@ -46,6 +46,14 @@ class FakeKeepModel:
             "reason": "文章开放科研项目申报，任务直接要求研发多模态大模型。",
             "summary": "文章发布大模型科研项目申报通知，并明确申报期限和多模态大模型研究任务。",
             "deadline": {"status": "confirmed", "raw_text": "请于8月30日前提交申报材料", "timestamp": 1788019200, "timezone": "Asia/Shanghai"},
+            "importance": {
+                "level": "medium",
+                "reason": "方向高度符合，项目规模和截止紧迫性中等。",
+                "factors": {
+                    "deadline_urgency": "medium", "project_significance": "medium",
+                    "amount_level": "unknown", "amount_raw_text": "", "domain_fit": "strong",
+                },
+            },
             "evidence": [
                 {"type": "solicitation", "text": "请于8月30日前提交申报材料", "location": "申报要求"},
                 {"type": "domain", "text": "研发多模态大模型训练方法", "location": "研究内容"},
