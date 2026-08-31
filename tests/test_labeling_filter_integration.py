@@ -27,7 +27,7 @@ def load_selector_module():
 
 
 class FakeKeepModel:
-    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> dict:
+    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> tuple[dict, dict]:
         return {
             "schema_version": 2,
             "tree_version": load_tree_spec()["version"],
@@ -51,7 +51,7 @@ class FakeKeepModel:
             ],
             "application_type": "科研项目申请",
             "domains": ["大模型"],
-        }
+        }, {}
 
 
 class PythonLabelFilterIntegrationTest(unittest.IsolatedAsyncioTestCase):

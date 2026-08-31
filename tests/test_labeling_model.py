@@ -42,8 +42,9 @@ class LabelingModelCompatibilityTest(unittest.IsolatedAsyncioTestCase):
         )
         with patch("src.labeling.model.AsyncOpenAI", return_value=client):
             model = OpenAILabelModel(config)
-        payload = await model.label("system", "article")
+        payload, usage = await model.label("system", "article")
         self.assertEqual(payload, {"schema_version": 2})
+        self.assertEqual(usage, {})
         self.assertEqual(
             client.completions.kwargs["response_format"], {"type": "json_object"}
         )

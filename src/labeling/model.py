@@ -30,12 +30,28 @@ class LabelOutput(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     evidence: list[EvidenceOutput]
     application_type: Literal["科研项目申请", "科研指南申请", "都不是"]
-    domains: list[Literal["无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂"]]
+    domains: list[Literal["无人机", "具身智能", "大模型", "空天", "机器人", "机械臂"]]
 
 
 class LabelModel(Protocol):
-    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> dict:
+    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> tuple[dict, dict]:
+        """Return (payload, usage). usage carries prompt/completion/cached tokens."""
         ...
+
+
+def _usage_from_response(response) -> dict:
+    """Extract token usage from an OpenAI SDK response object (chat or responses)."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    details = getattr(usage, "prompt_tokens_details", None) or {}
+    cached = int(getattr(details, "cached_tokens", 0) or 0)
+    return {
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        "cached_tokens": cached,
+    }
 
 
 class OpenAILabelModel:
@@ -53,7 +69,7 @@ class OpenAILabelModel:
             ),
         )
 
-    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> dict:
+    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> tuple[dict, dict]:
         content = article_prompt
         if feedback:
             content += (
@@ -74,7 +90,7 @@ class OpenAILabelModel:
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("model returned no parsed label (possibly a refusal)")
-            return parsed.model_dump(mode="json")
+            return parsed.model_dump(mode="json"), _usage_from_response(response)
 
         schema = json.dumps(LabelOutput.model_json_schema(), ensure_ascii=False)
         response = await self.client.chat.completions.create(
@@ -103,4 +119,4 @@ class OpenAILabelModel:
             raise RuntimeError(f"model returned invalid JSON: {exc}") from exc
         if not isinstance(payload, dict):
             raise RuntimeError("model JSON root must be an object")
-        return payload
+        return payload, _usage_from_response(response)

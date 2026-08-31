@@ -75,6 +75,18 @@ class LabelSchemaV2Test(unittest.TestCase):
         errors = validate_payload(payload)
         self.assertTrue(any("belongs to DROP" in error for error in errors))
 
+    def test_satellite_is_not_an_active_target_domain(self) -> None:
+        payload = label_payload(
+            "KEEP",
+            "K1",
+            ["E1:PASS", "O1:PASS", "O2:PASS", "R1:PASS", "A1:PASS", "T1:PASS", "D1:PASS", "K1"],
+            "科研项目申请",
+            ["卫星"],
+        )
+        errors = validate_payload(payload)
+        self.assertTrue(any("unknown values: 卫星" in error for error in errors))
+        self.assertNotIn("卫星", db.DOMAINS)
+
     def test_summary_is_optional_for_existing_v2_but_validated_when_present(self) -> None:
         payload = label_payload(
             "KEEP",

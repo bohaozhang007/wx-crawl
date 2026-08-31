@@ -45,11 +45,11 @@ class FakeModel:
         self.calls = 0
         self.feedback: list[str] = []
 
-    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> dict:
+    async def label(self, system_prompt: str, article_prompt: str, feedback: str = "") -> tuple[dict, dict]:
         self.feedback.append(feedback)
         output = self.outputs[min(self.calls, len(self.outputs) - 1)]
         self.calls += 1
-        return output
+        return output, {}
 
 
 class LabelingConfigTest(unittest.TestCase):

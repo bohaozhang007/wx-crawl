@@ -18,7 +18,7 @@ ARTICLES_ROOT = REPO_ROOT / "results" / "articles"
 DEFAULT_DB_PATH = REPO_ROOT / "results" / "articles.sqlite3"
 SELECTOR_SCRIPT = REPO_ROOT / "skill" / "article-label-export" / "scripts" / "select_articles.py"
 APPLICATION_TYPES = ("科研项目申请", "科研指南申请")
-DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
+DOMAINS = ("无人机", "具身智能", "大模型", "空天", "机器人", "机械臂")
 LOGGER = logging.getLogger("article-label-export")
 
 SCHEMA = """
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS article_domains (
     domain TEXT NOT NULL,
     PRIMARY KEY (article_id, domain),
     FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE,
-    CHECK (domain IN ('无人机', '卫星', '具身智能', '大模型', '空天', '机器人', '机械臂'))
+    CHECK (domain IN ('无人机', '具身智能', '大模型', '空天', '机器人', '机械臂'))
 );
 
 CREATE TABLE IF NOT EXISTS deliveries (

@@ -63,6 +63,51 @@ def write_details(payload: dict, run_dir: Path | None) -> Path:
     return path
 
 
+def write_usage(payload: dict, run_dir: Path | None) -> Path | None:
+    """Persist per-call token usage into the run directory as labeling_usage.json.
+
+    The payload is the labeling result dict whose top-level `usage` aggregates
+    every direct API call (prompt/completion/cached tokens, per-article detail).
+    Writing this inside the run directory before any prune keeps the cost audit
+    trail even after article directories are cleaned up.
+    """
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    if run_dir is not None:
+        path = run_dir / "labeling_usage.json"
+    else:
+        output_dir = ARTICLES_ROOT.parent / "record" / ".labeling"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+        path = output_dir / f"labeling_usage_{stamp}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1,
+        "model": payload.get("model"),
+        "provider": payload.get("provider"),
+        "run_dir": payload.get("run_dir"),
+        "written_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "usage": usage,
+    }
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(record, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+    return path
+
+
 def emit(payload: dict, *, verbose: bool) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2 if verbose else None))
 
@@ -135,6 +180,7 @@ def main() -> int:
         result["config_source"] = config.source
         result["run_dir"] = str(resolved_run) if resolved_run else None
         details_path = write_details(result, resolved_run)
+        usage_path = write_usage(result, resolved_run)
         summary = {
             "status": "failed" if result["failed"] else "ok",
             "command": "label",

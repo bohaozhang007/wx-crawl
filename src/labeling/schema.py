@@ -16,7 +16,7 @@ SUMMARY_MAX_CHARS = 500
 DECISIONS = ("KEEP", "DROP", "REVIEW")
 APPLICATION_TYPES = ("科研项目申请", "科研指南申请", "都不是")
 POSITIVE_APPLICATION_TYPES = ("科研项目申请", "科研指南申请")
-DOMAINS = ("无人机", "卫星", "具身智能", "大模型", "空天", "机器人", "机械臂")
+DOMAINS = ("无人机", "具身智能", "大模型", "空天", "机器人", "机械臂")
 EVIDENCE_TYPES = ("solicitation", "research_task", "domain", "negative", "missing_evidence")
 REQUIRED_KEYS = {
     "schema_version",

@@ -244,13 +244,16 @@ async def label_one(
     article_prompt = build_article_prompt(article.article_dir, article.metadata, article.content)
     feedback = ""
     last_error = ""
+    usage_attempts: list[dict] = []
     for attempt in range(max_retries + 1):
         try:
-            payload = await model.label(system_prompt, article_prompt, feedback)
+            payload, usage = await model.label(system_prompt, article_prompt, feedback)
+            if usage:
+                usage_attempts.append({"attempt": attempt + 1, **usage})
             errors = validate_model_label(payload, article)
             if not errors:
                 path = write_label_atomic(article.article_dir, payload)
-                return {
+                result: dict[str, Any] = {
                     "article_dir": str(article.article_dir),
                     "status": "labeled",
                     "decision": payload["decision"],
@@ -258,6 +261,9 @@ async def label_one(
                     "label_path": str(path),
                     "attempts": attempt + 1,
                 }
+                if usage_attempts:
+                    result["usage"] = usage_attempts
+                return result
             last_error = "; ".join(errors)
             feedback = last_error
         except Exception as exc:  # SDK exposes several transient exception subclasses.
@@ -265,12 +271,15 @@ async def label_one(
             feedback = ""
         if attempt < max_retries:
             await asyncio.sleep(min(2**attempt, 8))
-    return {
+    result = {
         "article_dir": str(article.article_dir),
         "status": "failed",
         "error": last_error,
         "attempts": max_retries + 1,
     }
+    if usage_attempts:
+        result["usage"] = usage_attempts
+    return result
 
 
 async def run_labeling(
@@ -313,10 +322,25 @@ async def run_labeling(
             item["article_dir"],
         )
     results.extend(skipped)
+    usage: dict[str, Any] = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cached_tokens": 0, "per_article": {}}
+    for item in results:
+        per = item.get("usage")
+        if not isinstance(per, list):
+            continue
+        usage["calls"] += len(per)
+        usage["per_article"][item["article_dir"]] = per
+        for call in per:
+            usage["prompt_tokens"] += int(call.get("prompt_tokens") or 0)
+            usage["completion_tokens"] += int(call.get("completion_tokens") or 0)
+            usage["total_tokens"] += int(call.get("total_tokens") or 0)
+            usage["cached_tokens"] += int(call.get("cached_tokens") or 0)
+    if not usage["per_article"]:
+        usage.pop("per_article", None)
     return {
         "candidates": len(candidates),
         "labeled": sum(item["status"] == "labeled" for item in results),
         "failed": sum(item["status"] == "failed" for item in results),
         "skipped_valid": sum(item["status"] == "skipped_valid" for item in results),
+        "usage": usage,
         "results": results,
     }
