@@ -26,6 +26,7 @@ SYNC = REPO / "skill/wechat-ai-table-sync/scripts/sync_articles.py"
 RECORD = REPO / "results/record"
 CRAWLER_LOCK = RECORD / ".crawler.lock"
 PYTHON = REPO / ".venv/bin/python"
+REMINDERS = [str(PYTHON), "-m", "src.reminders.cli", "reconcile"]
 LABEL_PROCESS_ATTEMPTS = 2
 LABEL_RETRY_DELAY_SECONDS = 5
 
@@ -339,12 +340,14 @@ def main() -> int:
     ingested, ingest_failures = run_isolated(selected_batches, "database", ingest_batch)
     details["failed"].extend(ingest_failures)
     sync_json: dict = {"inserted": 0, "updated": 0, "unchanged": 0}
+    reminder_json: dict = {"created": 0, "next_remind_at": None, "timer": "idle"}
     completed: list[dict] = []
     if ingested:
         try:
             sync_json = parse_json_object(
                 run([str(PYTHON), str(SYNC), "--mode", "incremental"])
             )
+            reminder_json = parse_json_object(run(REMINDERS))
         except Exception as exc:
             details["failed"].extend(
                 {
@@ -374,6 +377,7 @@ def main() -> int:
         "duration_seconds": round(time.monotonic() - storage_started, 3),
     }
     details["storage_summary"] = storage_summary
+    details["reminder_summary"] = reminder_json
     if batches:
         notify_stage("storage", storage_summary, details["notifications"])
 

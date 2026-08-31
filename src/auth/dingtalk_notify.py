@@ -141,3 +141,21 @@ def pipeline_stage_message(stage: str, payload: dict[str, object]) -> str:
 
 def send_pipeline_stage(stage: str, payload: dict[str, object]) -> None:
     _send_text(pipeline_stage_message(stage, payload))
+
+
+def send_deadline_reminders(items: list[dict]) -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    lines = [f"⏰ 科研项目截止提醒（提前 {items[0].get('reminder_days', 7)} 天）", ""]
+    for index, item in enumerate(items, start=1):
+        deadline = datetime.fromtimestamp(int(item["deadline_at"]), ZoneInfo("Asia/Shanghai"))
+        lines.extend([
+            f"{index}. {item['title']}",
+            f"截止：{deadline:%Y-%m-%d %H:%M}",
+            f"公众号：{item.get('account_name') or '-'}",
+            f"原文：{item['url']}",
+            "",
+        ])
+    message = "\n".join(lines).rstrip()
+    _send_text(message)
+    return "sent"

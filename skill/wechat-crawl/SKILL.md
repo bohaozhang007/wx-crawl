@@ -5,6 +5,11 @@ description: Run, check, troubleshoot, or explain the local wx-crawl WeChat Offi
 
 # WeChat Official Account Crawler
 
+After a valid article is archived, scan article anchors for attachment links. Always
+write source links to `attachments/attachments.json` and download directly accessible
+files best-effort. Authentication pages, online documents, expired links, and size-limit
+failures remain `link_only` and never make an otherwise valid article fail.
+
 Operate `/root/workspace/wx-crawl`. The crawler reads `config.yaml`, updates
 `account_sources.csv`, crawls every registered account, and writes the archive under
 `results/`.

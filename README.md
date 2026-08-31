@@ -185,6 +185,14 @@ and do not consume model context. A notification delivery error is written to th
 execution details without interrupting article processing. The crawl itself continues to
 send its own single completion report from the independent no-agent task.
 
+Newly archived articles retain detected attachment URLs in
+`attachments/attachments.json`; directly accessible files are downloaded best-effort.
+Labeling extracts a structured application deadline in the same model response. Confirmed
+deadlines are stored in SQLite, synchronized to DingTalk, and scheduled through one
+persistent no-agent systemd timer seven days in advance. It wakes only for the next exact
+reminder, groups simultaneous items, and then schedules the following reminder. Ambiguous
+or missing dates are not scheduled.
+
 On a fresh machine, copy `install/hermes/wx_crawl_no_agent.sh` to
 `~/.hermes/scripts/`, make it executable, create or convert the 12:05 and 20:00 jobs
 with `--script wx_crawl_no_agent.sh --no-agent`, and set Hermes

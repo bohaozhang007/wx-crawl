@@ -41,6 +41,7 @@ def label_payload(
         "decision_path": path,
         "reason_code": reason_code,
         "reason": "这是针对当前文章内容给出的具体判断原因。",
+        "deadline": {"status": "missing", "raw_text": "", "timestamp": None, "timezone": "Asia/Shanghai"},
         "evidence": evidence,
         "application_type": application_type,
         "domains": domains,
@@ -95,9 +96,15 @@ class LabelSchemaV2Test(unittest.TestCase):
             "科研项目申请",
             ["大模型"],
         )
+        payload.pop("deadline")
         self.assertEqual(validate_payload(payload), [])
         self.assertTrue(validate_payload(payload, require_summary=True))
+        self.assertTrue(validate_payload(payload, require_deadline=True))
         payload["summary"] = "文章发布大模型科研项目申报通知，明确申报期限和研究任务。"
+        payload["deadline"] = {
+            "status": "missing", "raw_text": "", "timestamp": None,
+            "timezone": "Asia/Shanghai",
+        }
         self.assertEqual(validate_payload(payload, require_summary=True), [])
         payload["summary"] = "   "
         self.assertTrue(validate_payload(payload, require_summary=True))

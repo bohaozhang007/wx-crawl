@@ -49,6 +49,7 @@ from .content import (
     safe_component,
     validate_article,
 )
+from .attachments import archive_attachments
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -154,6 +155,8 @@ class CrawlConfig:
     mode: str
     articles_per_account: int
     incremental_max_days: int = 1
+    attachment_timeout_seconds: int = 30
+    attachment_max_mb: int = 50
 
 
 @dataclass
@@ -634,6 +637,8 @@ def load_config() -> CrawlConfig:
         mode=mode,
         articles_per_account=value,
         incremental_max_days=max_days,
+        attachment_timeout_seconds=int((data.get("attachments") or {}).get("timeout_seconds", 30)),
+        attachment_max_mb=int((data.get("attachments") or {}).get("max_size_mb", 50)),
     )
 
 
@@ -1296,6 +1301,16 @@ def crawl_account(
                 account_dir.mkdir(parents=True, exist_ok=True)
                 destination = final_destination(account_dir, timestamp, actual_title, url)
                 article_dir.rename(destination)
+                try:
+                    manifest = archive_attachments(
+                        destination,
+                        url,
+                        timeout_seconds=config.attachment_timeout_seconds,
+                        max_bytes=config.attachment_max_mb * 1024 * 1024,
+                    )
+                    logger.info("附件处理完成：%s（发现 %d，下载 %d）", actual_title, manifest["count"], manifest["downloaded"])
+                except Exception as exc:
+                    logger.warning("附件发现失败，正文仍保留：%s（%s）", actual_title, exc)
                 shutil.rmtree(candidate_parent, ignore_errors=True)
                 timing.add_article(actual_title, timestamp, directory_size(destination))
                 existing_keys.add(url_key)

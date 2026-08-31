@@ -28,6 +28,9 @@ class SyncTest(unittest.TestCase):
             "crawl_run": "run-1",
             "created_at": 1760000001,
             "updated_at": 1760000002,
+            "deadline_at": 1761000000,
+            "deadline_text": "截止至2025年10月21日",
+            "attachments": [{"source_url": "https://example.com/a.pdf"}],
         }
         fields = module.to_table_fields(row)
         self.assertEqual(fields, {
@@ -35,13 +38,16 @@ class SyncTest(unittest.TestCase):
             "account_name": "公众号", "publish_time": "1760000000",
             "application_type": "科研项目申请", "summary": "摘要",
             "content_text": "正文", "domains": "具身智能,机器人",
+            "deadline_at": "2025-10-21 06:40:00",
+            "deadline_text": "截止至2025年10月21日",
+            "attachments": "https://example.com/a.pdf",
         })
 
     def test_incremental_sync_inserts_missing_and_updates_changed_rows(self):
         api = Mock()
         api.list_records.return_value = [
             {"id": "remote-1", "fields": {"id": "1", "title": "旧标题"}},
-            {"id": "remote-2", "fields": {"id": "2", "url": "u2", "title": "相同", "account_name": "a", "publish_time": "2", "application_type": "科研项目申请", "domains": "", "summary": "", "content_text": ""}},
+            {"id": "remote-2", "fields": {"id": "2", "url": "u2", "title": "相同", "account_name": "a", "publish_time": "2", "application_type": "科研项目申请", "domains": "", "summary": "", "content_text": "", "deadline_at": "", "deadline_text": "", "attachments": ""}},
         ]
         rows = [
             {"id": 1, "title": "新标题", "url": "u1", "account_name": "a", "publish_time": 1,

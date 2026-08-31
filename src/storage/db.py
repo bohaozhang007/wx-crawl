@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS articles (
     summary TEXT NOT NULL DEFAULT '',
     content_text TEXT NOT NULL DEFAULT '',
     cover_url TEXT NOT NULL DEFAULT '',
+    deadline_status TEXT NOT NULL DEFAULT 'missing',
+    deadline_text TEXT NOT NULL DEFAULT '',
+    deadline_at INTEGER,
+    attachments_json TEXT NOT NULL DEFAULT '[]',
     crawl_run TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -70,6 +74,20 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at INTEGER,
     response TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (article_id, channel),
+    FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS deadline_reminders (
+    id INTEGER PRIMARY KEY,
+    article_id INTEGER NOT NULL,
+    deadline_at INTEGER NOT NULL,
+    remind_at INTEGER NOT NULL,
+    reminder_days INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'cancelled')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    sent_at INTEGER,
+    response TEXT NOT NULL DEFAULT '',
+    UNIQUE(article_id, deadline_at, reminder_days),
     FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE
 );
 
@@ -99,6 +117,15 @@ def init_database(db_path: Path = DEFAULT_DB_PATH) -> None:
     LOGGER.info("开始初始化数据库 db=%s", Path(db_path).resolve())
     with connect(db_path) as connection:
         connection.executescript(SCHEMA)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(articles)")}
+        for name, definition in {
+            "deadline_status": "TEXT NOT NULL DEFAULT 'missing'",
+            "deadline_text": "TEXT NOT NULL DEFAULT ''",
+            "deadline_at": "INTEGER",
+            "attachments_json": "TEXT NOT NULL DEFAULT '[]'",
+        }.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE articles ADD COLUMN {name} {definition}")
         connection.execute(
             "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', '1')"
         )
@@ -185,6 +212,15 @@ def text_content(article_dir: Path) -> str:
         raise StorageError(f"cannot read article text: {path}: {exc}") from exc
 
 
+def article_attachments(article_dir: Path) -> list[dict[str, Any]]:
+    path = article_dir / "attachments" / "attachments.json"
+    if not path.is_file():
+        return []
+    payload = read_json(path)
+    values = payload.get("attachments", []) if isinstance(payload, dict) else []
+    return values if isinstance(values, list) else []
+
+
 def validate_article(item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         raise StorageError("each report article must be a JSON object")
@@ -213,6 +249,14 @@ def validate_article(item: Any) -> dict[str, Any]:
     summary = item.get("summary")
     if not isinstance(summary, str):
         raise StorageError(f"summary is required for {url}")
+    deadline = item.get("deadline") or {}
+    deadline_status = str(deadline.get("status") or "missing")
+    deadline_text = str(deadline.get("raw_text") or "")
+    deadline_at = deadline.get("timestamp") if deadline_status == "confirmed" else None
+    if deadline_status not in {"confirmed", "ambiguous", "missing"}:
+        raise StorageError(f"invalid deadline status for {url}: {deadline_status}")
+    if deadline_at is not None:
+        deadline_at = int(deadline_at)
     account_name, account_id = account_details(article_dir)
     publish_time = item.get("publish_time") or metadata_value.get("publish_time") or 0
     try:
@@ -231,6 +275,10 @@ def validate_article(item: Any) -> dict[str, Any]:
         "summary": summary.strip(),
         "content_text": text_content(article_dir),
         "cover_url": str(item.get("cover_url") or metadata_value.get("cover_url") or "").strip(),
+        "deadline_status": deadline_status,
+        "deadline_text": deadline_text,
+        "deadline_at": deadline_at,
+        "attachments": article_attachments(article_dir),
     }
 
 
@@ -270,8 +318,9 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                 """INSERT INTO articles(
                     url, title, account_name, account_id, publish_time,
                     application_type, domains_json, summary, content_text,
-                    cover_url, crawl_run, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cover_url, deadline_status, deadline_text, deadline_at,
+                    attachments_json, crawl_run, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(url) DO UPDATE SET
                     title=excluded.title,
                     account_name=excluded.account_name,
@@ -282,6 +331,10 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                     summary=excluded.summary,
                     content_text=excluded.content_text,
                     cover_url=excluded.cover_url,
+                    deadline_status=excluded.deadline_status,
+                    deadline_text=excluded.deadline_text,
+                    deadline_at=excluded.deadline_at,
+                    attachments_json=excluded.attachments_json,
                     crawl_run=excluded.crawl_run,
                     updated_at=excluded.updated_at""",
                 (
@@ -295,6 +348,10 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                     article["summary"],
                     article["content_text"],
                     article["cover_url"],
+                    article["deadline_status"],
+                    article["deadline_text"],
+                    article["deadline_at"],
+                    json.dumps(article["attachments"], ensure_ascii=False),
                     run_id,
                     now,
                     now,
@@ -374,6 +431,7 @@ def query_articles(
         item = dict(row)
         try:
             item["domains"] = json.loads(item.pop("domains_json"))
+            item["attachments"] = json.loads(item.pop("attachments_json"))
         except (TypeError, json.JSONDecodeError) as exc:
             raise StorageError(f"invalid domains_json for article {item.get('id')}") from exc
         result.append(item)

@@ -191,8 +191,13 @@ def _normalize_evidence(value: str) -> str:
 
 
 def validate_model_label(payload: dict[str, Any], article: ArticleInput) -> list[str]:
-    errors = validate_payload(payload, require_summary=True)
+    errors = validate_payload(payload, require_summary=True, require_deadline=True)
     source = _normalize_evidence(article.evidence_text)
+    deadline = payload.get("deadline")
+    if isinstance(deadline, dict) and deadline.get("status") in {"confirmed", "ambiguous"}:
+        raw_text = deadline.get("raw_text")
+        if isinstance(raw_text, str) and _normalize_evidence(raw_text) not in source:
+            errors.append("deadline.raw_text is not present verbatim in the article")
     for index, evidence in enumerate(payload.get("evidence", [])):
         if not isinstance(evidence, dict) or evidence.get("type") == "missing_evidence":
             continue
@@ -297,7 +302,12 @@ async def run_labeling(
         label_path = article_dir / "label.json"
         if label_path.is_file() and not replace:
             label, errors = read_label(label_path)
-            if label is not None and not errors and str(label.get("summary") or "").strip():
+            if (
+                label is not None
+                and not errors
+                and str(label.get("summary") or "").strip()
+                and "deadline" in label
+            ):
                 skipped.append({"article_dir": str(article_dir), "status": "skipped_valid"})
                 continue
         candidates.append(article_dir)

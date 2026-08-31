@@ -15,7 +15,7 @@ DEFAULT_DB = REPO / "results" / "articles.sqlite3"
 BASE_ID = "P0MALyR8kNpXlRO7FYXjkO4bJ3bzYmDO"
 SHEET_ID = "0md26ggk3sgnjzj22zp3e"
 OPERATOR_UNION_ID = "nH3HfDiPL40MDE9MAPN5BZQiEiE"
-TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title")
+TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "attachments")
 
 
 def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
@@ -26,6 +26,19 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
         domains_text = domains
     else:
         domains_text = ",".join(str(x) for x in domains)
+    attachments = row.get("attachments") or []
+    attachment_links = "\n".join(
+        str(item.get("source_url") or "")
+        for item in attachments
+        if isinstance(item, dict) and item.get("source_url")
+    )
+    deadline_at = row.get("deadline_at")
+    if deadline_at:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        deadline_text_value = datetime.fromtimestamp(int(deadline_at), ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        deadline_text_value = ""
     return {
         "id": str(row.get("id", "")),
         "url": str(row.get("url", "")),
@@ -36,6 +49,9 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
         "domains": domains_text,
         "summary": str(row.get("summary", "")),
         "content_text": str(row.get("content_text", "")),
+        "deadline_at": deadline_text_value,
+        "deadline_text": str(row.get("deadline_text", "")),
+        "attachments": attachment_links,
     }
 
 
@@ -83,6 +99,18 @@ class NotableAPI:
                 return result
             token = body.get("nextToken") or ""
 
+    def ensure_fields(self, field_names: tuple[str, ...]) -> None:
+        headers = self.models.GetAllFieldsHeaders(x_acs_dingtalk_access_token=self.token)
+        request = self.models.GetAllFieldsRequest(operator_id=self.operator_id)
+        response = self.client.get_all_fields_with_options(self.base_id, self.sheet_id, request, headers, self.runtime)
+        existing = {str(item.get("name")) for item in (response.body.to_map().get("value") or [])}
+        create_headers = self.models.CreateFieldHeaders(x_acs_dingtalk_access_token=self.token)
+        for name in field_names:
+            if name in existing:
+                continue
+            create = self.models.CreateFieldRequest(name=name, type="text", operator_id=self.operator_id)
+            self.client.create_field_with_options(self.base_id, self.sheet_id, create, create_headers, self.runtime)
+
     def insert_records(self, fields_list: list[dict[str, str]]) -> None:
         if not fields_list:
             return
@@ -127,7 +155,9 @@ def main() -> int:
     parser.add_argument("--sheet-id", default=SHEET_ID)
     parser.add_argument("--operator-id", default=OPERATOR_UNION_ID)
     args = parser.parse_args()
-    result = sync_rows(NotableAPI(args.base_id, args.sheet_id, args.operator_id), load_rows(args.db), args.mode)
+    api = NotableAPI(args.base_id, args.sheet_id, args.operator_id)
+    api.ensure_fields(TABLE_FIELDS)
+    result = sync_rows(api, load_rows(args.db), args.mode)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

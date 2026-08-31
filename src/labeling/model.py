@@ -18,6 +18,15 @@ class EvidenceOutput(BaseModel):
     location: str
 
 
+class DeadlineOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["confirmed", "ambiguous", "missing"]
+    raw_text: str
+    timestamp: int | None
+    timezone: Literal["Asia/Shanghai"]
+
+
 class LabelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +37,7 @@ class LabelOutput(BaseModel):
     reason_code: str
     reason: str
     summary: str = Field(min_length=1, max_length=500)
+    deadline: DeadlineOutput
     evidence: list[EvidenceOutput]
     application_type: Literal["科研项目申请", "科研指南申请", "都不是"]
     domains: list[Literal["无人机", "具身智能", "大模型", "空天", "机器人", "机械臂"]]

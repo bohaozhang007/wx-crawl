@@ -110,6 +110,12 @@ into the Agent when a summary and `details_file` are sufficient.
 8. Write `pipeline_state.json` as completed only after every required stage and
    AI-table readback succeeds.
 
+9. Reconcile confirmed deadlines and adjust the single persistent
+   `wx-crawl-deadline-reminder.timer` to the earliest pending reminder. It invokes
+   `python -m src.reminders.cli dispatch` directly without an Agent, sends one grouped
+   DingTalk message, records idempotent delivery state, retries bounded failures, and
+   schedules the next exact reminder instead of polling daily.
+
 The scheduled pending-batch program sends exactly one aggregate DingTalk notification
 after each high-level downstream stage finishes: labeling, selection/reporting, and
 database/AI-table synchronization. It never sends article-, batch-, or retry-level

@@ -50,6 +50,7 @@ class LabelingModelCompatibilityTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("JSON Schema", client.completions.kwargs["messages"][0]["content"])
         self.assertIn('"summary"', client.completions.kwargs["messages"][0]["content"])
+        self.assertIn('"deadline"', client.completions.kwargs["messages"][0]["content"])
         self.assertEqual(client.completions.kwargs["model"], "deepseek-v4-flash")
 
 

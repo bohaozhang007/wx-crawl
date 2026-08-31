@@ -35,8 +35,8 @@ structured response and quoted evidence, and atomically writes `label.json`.
      --run-dir /root/workspace/wx-crawl/results/record/<timestamp>
    ```
 
-Existing valid v2 labels that already contain `summary` are skipped. A valid v2 label
-without `summary` is upgraded through the same model call; v1 labels are unsupported
+Existing valid v2 labels that already contain `summary` and structured `deadline` are
+skipped. A valid v2 label without either field is upgraded through the same model call; v1 labels are unsupported
 and must be deleted rather than migrated in place. Use `--replace` only when the user
 explicitly requests relabeling. Do not proceed to selection when the result reports failures.
 The unscoped command labels every pending archive article and must not be used by the
@@ -153,6 +153,12 @@ Write exactly these v2 fields:
   "reason_code": "O1-D1",
   "reason": "文章公布的是已完成评审的拟入选名单，没有开放新的申报机会。",
   "summary": "文章公示已完成评审的拟入选项目名单，并说明公示期限和意见反馈方式。",
+  "deadline": {
+    "status": "missing",
+    "raw_text": "",
+    "timestamp": null,
+    "timezone": "Asia/Shanghai"
+  },
   "evidence": [
     {
       "type": "negative",
@@ -169,6 +175,11 @@ The API-backed Python labeler must generate `summary` in the same response for e
 KEEP, DROP, or REVIEW article. Keep it factual, 1-3 sentences, normally 100-200 Chinese
 characters, and separate from the decision rationale. Existing summary-less v2 labels
 remain readable for migration, but normal batch labeling upgrades them before reporting.
+
+The same response must generate `deadline`. Use `confirmed` only for an unambiguous
+final applicant submission deadline and convert it to an Asia/Shanghai Unix timestamp.
+Use `ambiguous` with verbatim source text and a null timestamp when it cannot be converted,
+or `missing` when absent. Only confirmed deadlines are scheduled.
 
 Use evidence types only from:
 

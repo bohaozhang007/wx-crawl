@@ -211,6 +211,8 @@ def valid_label(article_dir: Path) -> tuple[dict[str, Any] | None, str | None]:
     label, errors = read_label(label_path)
     if errors:
         return None, "; ".join(errors)
+    if label is not None and "deadline" not in label:
+        return None, "label.json is missing structured deadline"
     return label, None
 
 
@@ -278,6 +280,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
                 "reason_code": label["reason_code"],
                 "reason": label["reason"],
                 "summary": label.get("summary", ""),
+                "deadline": label.get("deadline"),
                 "evidence": label["evidence"],
                 "application_type": label["application_type"],
                 "domains": label["domains"],

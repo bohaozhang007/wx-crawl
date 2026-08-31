@@ -30,7 +30,7 @@ remove DingTalk fields and does not synchronize delivery `channel` state.
 - Sheet name: `爬取公众号情况日志`
 - DingTalk operator ID: the configured operator unionId; never substitute a Hermes user ID.
 
-The existing table fields are exactly:
+The managed table fields are:
 
 ```text
 id
@@ -42,12 +42,19 @@ summary
 url
 domains
 title
+deadline_at
+deadline_text
+attachments
 ```
 
 `domains` is populated from the SQLite article-domain relation / `domains_json`
 value as comma-separated text. `account_id`, `cover_url`, `crawl_run`, timestamps,
 and `channel` are intentionally not synchronized because the target table has
 no corresponding fields.
+
+`deadline_at` is formatted in Asia/Shanghai time, `deadline_text` preserves source
+wording, and `attachments` contains original URLs separated by newlines. The sync ensures
+these managed text fields exist but never deletes unrelated table fields.
 
 ## Prerequisites
 
@@ -74,14 +81,14 @@ for a controlled test or another authorized table.
 ## Procedure
 
 1. Load all rows from SQLite `articles`, ordered by `id`; parse `domains_json`.
-   Completion criterion: every source row has a string value for the nine target fields.
+   Completion criterion: every source row has a string value for the twelve managed fields.
 2. Obtain a DingTalk access token from the configured application credentials.
    Completion criterion: token acquisition succeeds without exposing its value.
 3. List all target records with pagination. Completion criterion: every remote
    record is considered, not only the first page.
 4. Index remote records by their `fields.id` value. Completion criterion: duplicate
    source IDs are not created.
-5. Map each database row to the fixed nine-field schema. Convert values to
+5. Map each database row to the fixed twelve-field schema. Convert values to
    strings; join domain labels with commas.
 6. In incremental mode, insert missing IDs and update only changed rows. In full
    mode, update every existing matching ID and insert missing IDs. The script does
@@ -89,7 +96,7 @@ for a controlled test or another authorized table.
 7. Send writes in bounded batches. Completion criterion: the CLI prints JSON with
    `inserted`, `updated`, and `unchanged` counts.
 8. Verify by listing the table again and checking that each source `id` maps to one
-   remote record whose nine fields equal the mapped source fields.
+   remote record whose twelve managed fields equal the mapped source fields.
 
 ## Safety and Idempotency
 

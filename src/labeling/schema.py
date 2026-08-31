@@ -29,7 +29,7 @@ REQUIRED_KEYS = {
     "application_type",
     "domains",
 }
-EXPECTED_KEYS = REQUIRED_KEYS | {"summary"}
+EXPECTED_KEYS = REQUIRED_KEYS | {"summary", "deadline"}
 
 TREE_VERSION_RE = re.compile(r"^Tree version: `([^`]+)`\s*$", re.MULTILINE)
 NODE_RE = re.compile(r"^## \[([A-Z][A-Z0-9-]*)\]\s+.+$", re.MULTILINE)
@@ -106,7 +106,9 @@ def _validate_path(value: Any, spec: dict[str, Any], reason_code: Any) -> list[s
     return errors
 
 
-def validate_payload(payload: Any, *, require_summary: bool = False) -> list[str]:
+def validate_payload(
+    payload: Any, *, require_summary: bool = False, require_deadline: bool = False
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(payload, dict):
         return ["root value must be a JSON object"]
@@ -119,6 +121,8 @@ def validate_payload(payload: Any, *, require_summary: bool = False) -> list[str
         )
     if require_summary and "summary" not in payload:
         errors.append("summary is required for newly generated v2 labels")
+    if require_deadline and "deadline" not in payload:
+        errors.append("deadline is required for newly generated v2 labels")
 
     spec = load_tree_spec()
     if payload.get("schema_version") != SCHEMA_VERSION:
@@ -149,6 +153,35 @@ def validate_payload(payload: Any, *, require_summary: bool = False) -> list[str
             errors.append("summary must be a non-empty factual article summary")
         elif len(summary.strip()) > SUMMARY_MAX_CHARS:
             errors.append(f"summary must be at most {SUMMARY_MAX_CHARS} characters")
+
+    deadline = payload.get("deadline")
+    if "deadline" in payload:
+        if not isinstance(deadline, dict) or set(deadline) != {
+            "status", "raw_text", "timestamp", "timezone"
+        }:
+            errors.append("deadline must contain exactly status, raw_text, timestamp, and timezone")
+        else:
+            status = deadline.get("status")
+            raw_text = deadline.get("raw_text")
+            timestamp = deadline.get("timestamp")
+            if status not in {"confirmed", "ambiguous", "missing"}:
+                errors.append("deadline.status is not allowed")
+            if deadline.get("timezone") != "Asia/Shanghai":
+                errors.append("deadline.timezone must be Asia/Shanghai")
+            if not isinstance(raw_text, str):
+                errors.append("deadline.raw_text must be a string")
+            if status == "confirmed":
+                if not isinstance(timestamp, int) or isinstance(timestamp, bool) or timestamp <= 0:
+                    errors.append("confirmed deadline requires a positive Unix timestamp")
+                if not isinstance(raw_text, str) or not raw_text.strip():
+                    errors.append("confirmed deadline requires its verbatim source text")
+            elif status == "ambiguous":
+                if timestamp is not None:
+                    errors.append("ambiguous deadline timestamp must be null")
+                if not isinstance(raw_text, str) or not raw_text.strip():
+                    errors.append("ambiguous deadline requires its verbatim source text")
+            elif status == "missing" and timestamp is not None:
+                errors.append("missing deadline timestamp must be null")
 
     evidence = payload.get("evidence")
     evidence_types: set[str] = set()

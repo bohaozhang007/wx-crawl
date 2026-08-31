@@ -30,6 +30,14 @@ missing_evidence 类型可以描述缺失文件而不引用正文。
 截止时间等正文明确给出的信息；其他文章概括其主要事实。不得把 KEEP/DROP/REVIEW 判断理由
 当作摘要，不得补充原文没有的信息。
 
+同一次输出必须生成 deadline。只把正文明确给出的最终申报截止时间转换为北京时间 Unix
+时间戳；同时逐字保留原文时间。无法唯一换算的“月底前、另行通知、长期有效”等使用
+ambiguous 且 timestamp=null；正文没有截止时间则使用 missing、raw_text=""、timestamp=null。
+不要把公示期、活动报名、推荐单位内部时间或文章发布时间误当申报截止时间。若存在多个
+申报节点，选择申请人最终提交节点，其他时间可在 summary 中客观说明。
+正文只给出完整日期而没有时分时，按该日北京时间 23:59:59 记录，并在 raw_text 中保留
+原始日期；缺少年份或不能唯一确定具体日期时不得猜测，必须标为 ambiguous。
+
 <decision_tree>
 {decision_tree}
 </decision_tree>

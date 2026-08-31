@@ -33,3 +33,16 @@ labeling:
   # 单次模型请求的超时时间和失败后的重试次数。
   timeout_seconds: 180
   max_retries: 2
+
+attachments:
+  # 始终保留识别到的附件原始链接；可直接访问时同时下载到文章目录 attachments/。
+  timeout_seconds: 30
+  max_size_mb: 50
+
+deadline_reminder:
+  # 仅对打标确认的明确截止时间创建提醒；模糊或缺失时间不会调度。
+  enabled: true
+  days_before: 7
+  timezone: Asia/Shanghai
+  retry_minutes: 30
+  max_attempts: 3
