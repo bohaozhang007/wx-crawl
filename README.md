@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-CN.md)
 
-`wx-crawl` builds a local archive of WeChat Official Account history and article content. It uses [wechat-mp-tools](https://github.com/x554960766/wechat-mp-tools) for account discovery, history retrieval, authentication, and primary article downloading, and falls back to [we-mp-rss](https://github.com/rachelos/we-mp-rss) when the primary article result is missing or incomplete. Many thanks to both projects for making this workflow possible.
+`wx-crawl` builds a local archive of WeChat Official Account history and article content. It uses [wechat-mp-tools](https://github.com/x554960766/wechat-mp-tools) as the primary history and article backend. If that history backend is unavailable, it switches to [WechRss](https://github.com/johamwon/wechrss), which connects directly to WeRead and keeps refreshable credentials locally. [we-mp-rss](https://github.com/rachelos/we-mp-rss) remains the article-content fallback when the primary article result is missing or incomplete. Many thanks to these projects for making this workflow possible.
 
 ## Contents
 
@@ -24,7 +24,7 @@ The normal workflow is:
 1. Scan the input CSV for WeChat article URLs.
 2. Resolve each URL to an account and merge newly discovered accounts into `account_sources.csv`.
 3. Revalidate every registered account ID and name.
-4. Retrieve history candidates according to the configured crawl mode.
+4. Retrieve history candidates according to the configured crawl mode, using `wechat-mp-tools` first and WechRss if the first history backend is unavailable.
 5. Skip article URLs that already exist locally.
 6. Download each candidate with `wechat-mp-tools`.
 7. If the primary result fails a lightweight content check, retry it with `we-mp-rss`.
@@ -350,15 +350,16 @@ The recommended setup method is to ask Codex to install and verify the project. 
 Set up this wx-crawl repository for local execution on Linux.
 
 Use Python 3.12 as specified by .python-version. Read
-install/third_party_versions.yaml, clone both repositories into third_party/
+install/third_party_versions.yaml, clone all listed repositories into third_party/
 using the exact directory names and pinned commits recorded there, and do not
 modify their tracked source files.
 
-Create an independent .venv inside each third-party repository. Install the
-wechat-mp-tools requirements plus install/requirements.txt into the
-wechat-mp-tools environment. Install the we-mp-rss requirements into its own
-environment, then install its matching Playwright Chromium browser and any
-required Linux browser libraries.
+Create independent `.venv` environments inside `wechat-mp-tools` and
+`we-mp-rss`. Install the wechat-mp-tools requirements plus
+`install/requirements.txt` into the wechat-mp-tools environment; that environment
+also runs the local WechRss adapter. Install the we-mp-rss requirements into its
+own environment, then install its matching Playwright Chromium browser and any
+required Linux browser libraries. Do not modify the WechRss checkout.
 
 Run `python3 src/crawl.py --check`. Confirm that both third-party Git
 worktrees have no tracked changes, both environments pass `python -m pip
@@ -372,8 +373,9 @@ The expected third-party layout is:
 third_party/
 ├── wechat-mp-tools/
 │   └── .venv/
-└── we-mp-rss/
-    └── .venv/
+├── we-mp-rss/
+│   └── .venv/
+└── wechrss/
 ```
 
 Python 3.12 is intentional: the pinned `wechat-mp-tools` dependencies require `mitmproxy` 12, and this project has been validated with Python 3.12.

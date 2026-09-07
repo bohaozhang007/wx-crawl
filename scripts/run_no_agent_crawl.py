@@ -32,16 +32,21 @@ def delivery_message(payload: dict[str, object], returncode: int, label: dict[st
             f"\n登记公众号：{int(payload.get('registered_account_count') or 0)} 个"
             f"\n模式：{payload.get('mode') or '-'}"
         )
-    if returncode == 0 and status == "ok":
+    if returncode == 0 and status in {"ok", "degraded"}:
         duration = float(payload.get("duration_seconds") or 0) / 60
+        title = "✅ 微信公众号 no-agent 爬取完成" if status == "ok" else "⚠️ 微信公众号 no-agent 降级抓取完成"
         message = (
-            "✅ 微信公众号 no-agent 爬取完成"
-            f"\n运行：{payload.get('run_id') or '-'}"
+            title + f"\n运行：{payload.get('run_id') or '-'}"
+            f"\n历史后端：{payload.get('crawl_backend') or 'wechat-mp-tools'}"
             f"\n公众号：{int(payload.get('account_count') or 0)} 个"
             f"\n新增文章：{int(payload.get('new_article_count') or 0)} 篇"
             f"\n耗时：{duration:.1f} 分钟"
             f"\n记录：{payload.get('record_dir') or '-'}"
         )
+        if status == "degraded":
+            message += (
+                "\n历史列表：本轮未更新，后续任务继续重试"
+            )
         if label is not None:
             marker = "⚠️" if int(label.get("failed") or 0) else "✅"
             message += (
@@ -69,7 +74,7 @@ def main() -> int:
         tail = " ".join(result.stderr.splitlines()[-5:])[:500]
         payload = {"status": "failed", "error": tail or "爬虫未返回 JSON 结果"}
     label_payload = payload.get("immediate_labeling") if isinstance(payload.get("immediate_labeling"), dict) else None
-    if not args.check and result.returncode == 0 and payload.get("status") == "ok" and payload.get("record_dir") and label_payload is None:
+    if not args.check and result.returncode == 0 and payload.get("status") in {"ok", "degraded"} and payload.get("record_dir") and label_payload is None:
         labeled = subprocess.run(
             [str(PYTHON), "-m", "src.labeling.cli", "--run-dir", str(payload["record_dir"])],
             cwd=ROOT, text=True, capture_output=True,

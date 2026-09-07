@@ -111,6 +111,11 @@ content. Treat `decision-tree.md` as the source of truth if examples conflict.
    background, biographies, issuer introductions, past results, unrelated roundup
    entries, footers, or related links does not match. Do not infer one domain from
    another; all inheritance rules default to false in `research-profile.yaml`.
+   Apply `excluded_task_families` before positive domain matching: satellite/data/
+   remote-sensing/communications/navigation application projects remain excluded even
+   when they use large models or agents. Preserve the explicit exception for space
+   robots/manipulators whose core task is in-orbit or space assembly, manufacturing,
+   construction, repair, maintenance, inspection, grasping, manipulation, or servicing.
 
 7. Write the v2 label atomically. Repeat `--path-step`, `--evidence`, and `--domain`
    as needed. Evidence arguments are `TYPE LOCATION TEXT`:

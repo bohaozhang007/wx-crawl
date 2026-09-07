@@ -79,13 +79,26 @@ def crawl_status_message(payload: dict[str, object]) -> str:
     run_id = str(payload.get("run_id") or "-")
     if status == "ok":
         duration = float(payload.get("duration_seconds") or 0) / 60
+        backend = str(payload.get("crawl_backend") or "wechat-mp-tools")
         return (
             "✅ 微信公众号定时爬取完成"
             f"\n运行：{run_id}"
+            f"\n历史后端：{backend}"
             f"\n公众号：{int(payload.get('account_count') or 0)} 个"
             f"\n新增文章：{int(payload.get('new_article_count') or 0)} 篇"
             f"\n耗时：{duration:.1f} 分钟"
             f"\n记录：{payload.get('record_dir') or '-'}"
+        )
+    if status == "degraded":
+        duration = float(payload.get("duration_seconds") or 0) / 60
+        return (
+            "⚠️ 微信公众号爬取降级完成"
+            f"\n运行：{run_id}"
+            "\n工具：we-mp-rss（仅处理输入 CSV 中的明确文章链接）"
+            f"\n新增文章：{int(payload.get('new_article_count') or 0)} 篇"
+            "\n历史列表：本轮未更新，后续任务将继续重试"
+            f"\n原因：{str(payload.get('fallback_reason') or '首选工具二维码不可用')[:300]}"
+            f"\n耗时：{duration:.1f} 分钟"
         )
     if status == "interrupted":
         title = "⏹️ 微信公众号定时爬取已中断"

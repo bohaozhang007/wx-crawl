@@ -8,7 +8,7 @@ from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from src.labeling.config import load_labeling_config
-from src.labeling.runner import discover_run_article_dirs, run_labeling
+from src.labeling.runner import ArticleInput, discover_run_article_dirs, enforce_domain_exclusions, run_labeling
 from src.labeling.schema import load_tree_spec, read_label
 
 
@@ -136,6 +136,23 @@ class LabelingRunnerTest(unittest.IsolatedAsyncioTestCase):
             "申报要求：请于8月30日前提交申报材料。研究内容：研发多模态大模型训练方法。",
             encoding="utf-8",
         )
+
+    def test_satellite_application_guard_drops_large_model_enablement(self) -> None:
+        article = ArticleInput(
+            self.article_dir, {}, "课题利用卫星遥感数据，结合多模态大模型开展智能解译。"
+        )
+        corrected = enforce_domain_exclusions(keep_payload(), article)
+        self.assertEqual(corrected["decision"], "DROP")
+        self.assertEqual(corrected["reason_code"], "D1-D4")
+        self.assertEqual(corrected["domains"], [])
+        self.assertEqual(corrected["importance"]["level"], "not_applicable")
+
+    def test_satellite_guard_preserves_space_robotic_arm_operations(self) -> None:
+        article = ArticleInput(
+            self.article_dir, {}, "研究卫星平台上的太空机械臂，用于在轨装配与在轨维修。"
+        )
+        original = keep_payload()
+        self.assertIs(enforce_domain_exclusions(original, article), original)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()

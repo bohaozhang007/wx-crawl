@@ -44,7 +44,8 @@ ambiguous 且 timestamp=null；正文没有截止时间则使用 missing、raw_t
 同一次输出必须生成 importance。只有 KEEP 才评为 high、medium 或 low；DROP/REVIEW 一律为
 not_applicable。综合判断 deadline_urgency、project_significance、amount_level 和 domain_fit，
 并给出可审计的具体 reason：
-- 截止时间：距当前不超过14天为 high，15至30天为 medium，超过30天为 low；不明确为 unknown。
+- 截止时间：只计算当前仍可申报的未来截止时间；距当前不超过14天为 high，15至30天为
+  medium，超过30天为 low；已经截止为 expired，不明确为 unknown。已截止绝不能提升重要度。
 - 项目重大性：国家/部委重大项目、重点专项、国家重点研发计划、揭榜挂帅等为 high；省市级、
   行业级或常规科研计划为 medium；小型、局部或例行项目为 low；正文无依据为 unknown。
 - 金额：仅依据正文明确金额。单项目不低于100万元或总额不低于1000万元为 high；20万至
@@ -56,6 +57,11 @@ not_applicable。综合判断 deadline_urgency、project_significance、amount_l
   任一成立。重大性 high 可以在金额未知时仍判 high。
 - medium：未达到 high，但至少两个因素达到 medium 或以上，且方向至少 medium。
 - low：其余仍满足 KEEP 的机会。截止临近本身不能把方向弱或不相关的内容提升为 high。
+
+方向判断必须先执行 research-profile 的 excluded_task_families。以卫星平台、卫星数据、遥感、
+通信、导航或星座应用为核心的课题，即使使用多模态大模型、智能体或 AI 赋能，也必须在 D1-D4
+排除，不能标记为大模型或空天。只有明确研究太空机器人/机械臂执行在轨或太空装配、制造、
+建造、维修、维护、检修、抓取、操作或服务的任务，才适用例外并继续判断机器人、机械臂等方向。
 
 <decision_tree>
 {decision_tree}

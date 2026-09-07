@@ -56,6 +56,15 @@ it forces a fresh QR login and retries that operation once. It sends login and t
 status notifications and closes any service it started. Never ask for cookies or tokens
 and never send a second QR from the Agent.
 
+If `wechat-mp-tools` cannot start or authenticate, the crawler automatically switches to
+the vendored WechRss direct history provider. WechRss has its own locally persisted,
+refreshable credentials and generates its own QR through the official WeChat/WeRead
+endpoints; the Python crawler sends that QR through the same DingTalk image path and waits
+up to five minutes. The fallback still applies the configured incremental/window policy and
+discovers history URLs, so a successful run reports `status=ok`, `crawl_backend=wechrss`,
+and `history_complete=true`. `we-mp-rss` remains only the per-article content fallback.
+Every later run retries `wechat-mp-tools` first. Never ask the Agent to manage either QR.
+
 ## Scheduling
 
 Recurring crawls use Hermes native script-only no-agent jobs:

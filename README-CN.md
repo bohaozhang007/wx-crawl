@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-CN.md)
 
-`wx-crawl` 用于在本地归档微信公众号的历史文章。项目以 [wechat-mp-tools](https://github.com/x554960766/wechat-mp-tools) 作为主要工具，负责识别公众号、获取历史列表、完成认证并下载文章；当主要工具得到的正文缺失或不完整时，再使用 [we-mp-rss](https://github.com/rachelos/we-mp-rss) 回退抓取。感谢这两个项目提供的核心能力。
+`wx-crawl` 用于在本地归档微信公众号的历史文章。项目优先使用 [wechat-mp-tools](https://github.com/x554960766/wechat-mp-tools) 获取历史列表并下载正文；如果首选历史后端不可用，则自动切换到直连微信读书、可在本地保存并续期凭据的 [WechRss](https://github.com/johamwon/wechrss)。正文缺失或不完整时，仍使用 [we-mp-rss](https://github.com/rachelos/we-mp-rss) 回退抓取。感谢这些项目提供的核心能力。
 
 ## 目录
 
@@ -25,7 +25,7 @@
 1. 扫描输入 CSV，提取其中的微信公众号文章链接。
 2. 根据链接识别公众号，并把新公众号合并到 `account_sources.csv`。
 3. 重新核对登记表中所有公众号的 ID 和名称。
-4. 根据配置的爬取模式生成历史文章候选列表。
+4. 根据配置的爬取模式生成历史文章候选列表；优先使用 `wechat-mp-tools`，不可用时切换到 WechRss。
 5. 按 URL 跳过本地已经存在的文章。
 6. 先用 `wechat-mp-tools` 下载候选文章。
 7. 如果主要工具的结果未通过内容校验，再用 `we-mp-rss` 回退抓取。
@@ -388,13 +388,14 @@ CLI 只负责数据库查询和推送状态记录，不直接耦合钉钉 Webhoo
 请在 Linux 环境中安装并配置当前 wx-crawl 仓库。
 
 使用 .python-version 指定的 Python 3.12。读取
-install/third_party_versions.yaml，把其中两个仓库克隆到 third_party/，
+install/third_party_versions.yaml，把其中列出的仓库克隆到 third_party/，
 目录名和提交版本必须与文件记录一致，不要修改第三方仓库中受 Git 跟踪的源码。
 
-分别在两个第三方仓库中创建独立的 .venv。把 wechat-mp-tools 自身依赖和
-install/requirements.txt 安装到 wechat-mp-tools 的环境中；把 we-mp-rss 自身依赖
-安装到它的环境中，然后安装与其 Playwright 版本匹配的 Chromium，以及 Chromium
-在当前 Linux 系统中需要的动态库。
+分别在 wechat-mp-tools 和 we-mp-rss 中创建独立的 `.venv`。把
+wechat-mp-tools 自身依赖和 install/requirements.txt 安装到 wechat-mp-tools
+环境中；本项目的 WechRss 适配层也使用该环境运行。把 we-mp-rss 自身依赖安装到
+它的环境中，然后安装与其 Playwright 版本匹配的 Chromium，以及 Chromium 在当前
+Linux 系统中需要的动态库。不要修改 WechRss 的源码工作区。
 
 最后运行 `python3 src/crawl.py --check`。确认两个第三方 Git 工作区都没有
 tracked source 修改，两个环境都能通过 `python -m pip check`，Chromium 可以
@@ -407,8 +408,9 @@ tracked source 修改，两个环境都能通过 `python -m pip check`，Chromiu
 third_party/
 ├── wechat-mp-tools/
 │   └── .venv/
-└── we-mp-rss/
-    └── .venv/
+├── we-mp-rss/
+│   └── .venv/
+└── wechrss/
 ```
 
 项目固定使用 Python 3.12：当前锁定版本的 `wechat-mp-tools` 依赖 `mitmproxy` 12，本项目也已经在 Python 3.12 环境中完整验证。

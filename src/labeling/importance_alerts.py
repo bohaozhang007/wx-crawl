@@ -87,7 +87,7 @@ def notify_high_importance(article_dirs: list[Path]) -> dict[str, Any]:
         fingerprint = _fingerprint(label, url)
         marker = article_dir / MARKER_NAME
         prior = _read_json(marker)
-        if prior.get("status") == "sent" and prior.get("fingerprint") == fingerprint:
+        if prior.get("status") == "sent":
             result["skipped_sent"] += 1
             continue
         importance = label["importance"]

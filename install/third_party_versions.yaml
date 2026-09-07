@@ -5,3 +5,7 @@ wechat-mp-tools:
 we-mp-rss:
   repository: https://github.com/rachelos/we-mp-rss.git
   commit: bfe48d239fc28a2284713d33ccfb6a09e7636769
+
+wechrss:
+  repository: https://github.com/johamwon/wechrss.git
+  commit: a99675f7ef1f3d457991d441a9124d3f6666bd45

@@ -32,6 +32,15 @@ METADATA_KEYS = (
     "digest",
     "description",
 )
+SATELLITE_APPLICATION_TERMS = (
+    "卫星数据", "卫星遥感", "遥感数据", "卫星通信", "卫星导航", "卫星载荷", "卫星星座",
+)
+SPACE_ROBOT_TERMS = ("太空机器人", "空间机器人", "在轨机器人", "机械臂", "机器人臂", "操作臂")
+SPACE_OPERATION_TERMS = (
+    "在轨装配", "太空装配", "空间装配", "在轨制造", "太空制造", "空间制造",
+    "在轨建造", "太空建造", "在轨维修", "太空维修", "在轨维护", "太空维护",
+    "在轨检修", "在轨抓取", "在轨操作", "在轨服务",
+)
 
 
 class LabelingError(ValueError):
@@ -190,6 +199,58 @@ def _normalize_evidence(value: str) -> str:
     return re.sub(r"\s+", "", value)
 
 
+def enforce_domain_exclusions(payload: dict[str, Any], article: ArticleInput) -> dict[str, Any]:
+    """Apply narrow business exclusions that must not depend on model consistency."""
+    if payload.get("decision") != "KEEP":
+        return payload
+    text = article.evidence_text
+    satellite_term = next((term for term in SATELLITE_APPLICATION_TERMS if term in text), "")
+    if not satellite_term:
+        return payload
+    robot_positions = [match.start() for term in SPACE_ROBOT_TERMS for match in re.finditer(re.escape(term), text)]
+    operation_positions = [match.start() for term in SPACE_OPERATION_TERMS for match in re.finditer(re.escape(term), text)]
+    # Require the robot and operation evidence to occur in the same local task context;
+    # unrelated roundup entries or footer recommendations must not open the exception.
+    has_space_robot_exception = any(
+        abs(robot_pos - operation_pos) <= 500
+        for robot_pos in robot_positions
+        for operation_pos in operation_positions
+    )
+    if has_space_robot_exception:
+        return payload
+    corrected = dict(payload)
+    corrected.update(
+        {
+            "decision": "DROP",
+            "decision_path": [
+                "E1:PASS", "O1:PASS", "O2:PASS", "R1:PASS", "A1:PASS",
+                "T1:PASS", "D1:D1-D4",
+            ],
+            "reason_code": "D1-D4",
+            "reason": (
+                "课题核心对象是卫星数据、遥感、通信、导航或载荷应用；"
+                "其中使用的人工智能、大模型或智能体只是卫星应用的赋能工具。"
+                "正文未同时明确太空机器人/机械臂及在轨装配、制造、维修、维护等操作任务，"
+                "因此命中卫星应用领域排除规则。"
+            ),
+            "evidence": [{"type": "negative", "text": satellite_term, "location": "任务正文"}],
+            "domains": [],
+            "importance": {
+                "level": "not_applicable",
+                "reason": "文章命中卫星应用领域排除规则，不参与项目重要度分级。",
+                "factors": {
+                    "deadline_urgency": "unknown",
+                    "project_significance": "unknown",
+                    "amount_level": "unknown",
+                    "amount_raw_text": "",
+                    "domain_fit": "none",
+                },
+            },
+        }
+    )
+    return corrected
+
+
 def validate_model_label(payload: dict[str, Any], article: ArticleInput) -> list[str]:
     errors = validate_payload(
         payload, require_summary=True, require_deadline=True, require_importance=True
@@ -261,6 +322,7 @@ async def label_one(
     for attempt in range(max_retries + 1):
         try:
             payload, usage = await model.label(system_prompt, article_prompt, feedback)
+            payload = enforce_domain_exclusions(payload, article)
             if usage:
                 usage_attempts.append({"attempt": attempt + 1, **usage})
             errors = validate_model_label(payload, article)

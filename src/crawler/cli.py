@@ -50,6 +50,16 @@ from .content import (
     validate_article,
 )
 from .attachments import archive_attachments
+try:
+    from integrations.wechrss_history import (
+        WechRssHistoryProvider,
+        WechRssRiskControlError,
+    )
+except ModuleNotFoundError:
+    from src.integrations.wechrss_history import (
+        WechRssHistoryProvider,
+        WechRssRiskControlError,
+    )
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,8 +74,10 @@ MP_PYTHON = MP_PROJECT / ".venv" / "bin" / "python"
 RSS_PROJECT = ROOT / "third_party" / "we-mp-rss"
 RSS_PYTHON = RSS_PROJECT / ".venv" / "bin" / "python"
 RSS_WORKER = Path(__file__).with_name("fallback_worker.py")
+WECHRSS_PROJECT = ROOT / "third_party" / "wechrss"
 AUTH_CONFIG_DIR = ROOT / "src" / "auth" / "config"
 WECHAT_AUTH_PATH = AUTH_CONFIG_DIR / "wechat-mp-tools.yaml"
+WECHRSS_AUTH_PATH = AUTH_CONFIG_DIR / "wechrss.json"
 LEGACY_WECHAT_AUTH_PATH = MP_PROJECT / "data" / "wechat_mp_config.json"
 API_BASE = "http://127.0.0.1:5200"
 PAGE_SIZE = 10
@@ -79,8 +91,6 @@ AUTH_ERROR_MARKERS = (
     "登录已过期",
     "session expired",
 )
-
-
 class AuthenticationRequiredError(RuntimeError):
     """The crawler cannot continue until WeChat Reading QR login succeeds."""
 
@@ -228,6 +238,9 @@ class RunReport:
     ended_at: datetime | None = None
     duration_seconds: float = 0.0
     status: str = "运行中"
+    crawl_backend: str = "wechat-mp-tools"
+    history_complete: bool = True
+    fallback_reason: str = ""
 
     @property
     def stamp(self) -> str:
@@ -1198,6 +1211,54 @@ def collect_history_candidates(
     return candidates
 
 
+def collect_history_candidates_with_fetcher(
+    fetch_page: Callable[[int], list[dict]],
+    config: CrawlConfig,
+    existing_keys: set[str],
+    existing_articles: dict[str, ExistingArticle],
+    logger: logging.Logger,
+    now: datetime | None = None,
+) -> list[tuple[str, str, dict]]:
+    """Run the common window/incremental policy over another history backend."""
+    candidates: list[tuple[str, str, dict]] = []
+    seen_keys: set[str] = set()
+    begin = 0
+    considered = 0
+    incremental_cutoff = None
+    if config.mode == "incremental":
+        current_time = (now or datetime.now(LOCAL_TIMEZONE)).astimezone(LOCAL_TIMEZONE)
+        incremental_cutoff = current_time - timedelta(days=config.incremental_max_days)
+    while True:
+        articles = retry(lambda: fetch_page(begin))
+        begin += PAGE_SIZE
+        if not articles:
+            break
+        for article in articles:
+            url = normalize_article_url(article.get("link") or "")
+            key = article_url_key(url)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            if incremental_cutoff is not None:
+                published_at = article_publish_datetime(article, existing_articles.get(key), logger)
+                if published_at is None:
+                    continue
+                if published_at < incremental_cutoff:
+                    return candidates
+            if config.mode == "incremental" and existing_keys:
+                if key in existing_keys:
+                    return candidates
+                candidates.append((url, key, article))
+                continue
+            considered += 1
+            if key not in existing_keys:
+                candidates.append((url, key, article))
+            if considered >= config.articles_per_account:
+                return candidates
+        time.sleep(random.uniform(1.0, 2.0))
+    return candidates
+
+
 def combine_article_candidates(
     explicit_urls: list[str],
     history_candidates: list[tuple[str, str, dict]],
@@ -1231,15 +1292,21 @@ def crawl_account(
     logger: logging.Logger,
     tools_log_dir: Path,
     explicit_urls: list[str],
+    history_page_fetcher: Callable[[int], list[dict]] | None = None,
 ) -> int:
     label = account.label
     account_dir = reconcile_account_directory(account)
     existing_articles = existing_article_index(account_dir)
     existing_keys = set(existing_articles)
     logger.info("公众号 %s 已有 %d 篇可按 URL 识别的文章", account.name, len(existing_keys))
-    history_candidates = collect_history_candidates(
-        api, account.mp_id, config, existing_keys, existing_articles, logger
-    )
+    if history_page_fetcher is None:
+        history_candidates = collect_history_candidates(
+            api, account.mp_id, config, existing_keys, existing_articles, logger
+        )
+    else:
+        history_candidates = collect_history_candidates_with_fetcher(
+            history_page_fetcher, config, existing_keys, existing_articles, logger
+        )
     candidates = combine_article_candidates(
         explicit_urls, history_candidates, existing_keys
     )
@@ -1336,6 +1403,122 @@ def crawl_account(
     return successes
 
 
+def crawl_with_wechrss_history(
+    seed_urls: list[str],
+    report: RunReport,
+    work_root: Path,
+    config: CrawlConfig,
+    logger: logging.Logger,
+    tools_log_dir: Path,
+) -> None:
+    """Discover and crawl complete candidates through the direct WechRss backend."""
+    def auth_status(status: str, detail: str = "") -> None:
+        try:
+            send_auth_status(status, detail)
+        except Exception as exc:
+            logger.warning("DingTalk 认证状态通知失败：%s", exc)
+
+    provider = WechRssHistoryProvider(
+        WECHRSS_PROJECT,
+        WECHRSS_AUTH_PATH,
+        logger=logger,
+        qr_path=tools_log_dir / "wechrss-login-qr.png",
+        on_qr=lambda path: send_login_qr(path, logger.info),
+        on_status=auth_status,
+        auth_wait_seconds=AUTH_WAIT_SECONDS,
+    )
+    provider.ensure_login()
+
+    discovered_by_mp_id: dict[str, dict] = {}
+    explicit_urls_by_mp_id: dict[str, list[str]] = {}
+    for index, seed_url in enumerate(seed_urls, start=1):
+        logger.info("WechRss 解析输入文章链接 [%d/%d]", index, len(seed_urls))
+        try:
+            resolved = provider.resolve_account(seed_url)
+        except Exception as exc:
+            logger.error("WechRss 无法解析输入链接，跳过 %s：%s", seed_url, exc)
+            continue
+        mp_id = str(resolved.get("fakeid") or "").strip()
+        if not mp_id:
+            continue
+        discovered = dict(resolved)
+        discovered["sample_url"] = seed_url
+        discovered_by_mp_id[mp_id] = discovered
+        explicit_urls_by_mp_id.setdefault(mp_id, []).append(seed_url)
+
+    registry, added_accounts = merge_discovered_accounts(
+        load_registry(), list(discovered_by_mp_id.values())
+    )
+    if not registry:
+        raise RuntimeError("WechRss 未能识别任何公众号，且注册表为空")
+
+    page_cache: dict[tuple[str, int], list[dict]] = {}
+
+    def page(account: RegisteredAccount, begin: int) -> list[dict]:
+        key = (account.mp_id, begin)
+        if key not in page_cache:
+            page_cache[key] = provider.history_page(account.mp_id, begin, PAGE_SIZE)
+        return page_cache[key]
+
+    renamed = 0
+    validation_warnings = 0
+    for account in registry:
+        try:
+            first_page = page(account, 0)
+            current_name = next(
+                (str(item.get("nickname") or "").strip() for item in first_page if item.get("nickname")),
+                "",
+            )
+            if current_name and current_name != account.name:
+                logger.info("WechRss 校验公众号名称更新：%s -> %s", account.name, current_name)
+                account.name = current_name
+                renamed += 1
+        except WechRssRiskControlError:
+            raise
+        except Exception as exc:
+            validation_warnings += 1
+            logger.warning("WechRss 公众号身份校验失败，抓取阶段将再次尝试 %s：%s", account.name, exc)
+
+    save_registry(registry)
+    update_global_summary(registry)
+    logger.info(
+        "WechRss 公众号发现完成：输入解析 %d 个、新增 %d 个、注册表共 %d 个；"
+        "名称更新 %d 个、预检警告 %d 个",
+        len(discovered_by_mp_id), added_accounts, len(registry), renamed, validation_warnings,
+    )
+
+    incomplete_accounts: list[str] = []
+    for index, account in enumerate(registry, start=1):
+        timing = report.start_account(account)
+        logger.info("WechRss 处理公众号 [%d/%d] %s", index, len(registry), account.name)
+        explicit_urls = [account.sample_url, *explicit_urls_by_mp_id.get(account.mp_id, [])]
+        try:
+            crawl_account(
+                LocalAPI(),
+                account,
+                work_root,
+                config,
+                timing,
+                logger,
+                tools_log_dir,
+                explicit_urls,
+                history_page_fetcher=lambda begin, target=account: page(target, begin),
+            )
+            timing.finish("成功")
+        except WechRssRiskControlError:
+            timing.finish("风控停止")
+            raise
+        except Exception as exc:
+            logger.error("WechRss 公众号处理失败 %s：%s", account.name, exc)
+            timing.finish("处理失败")
+            incomplete_accounts.append(account.name)
+    if incomplete_accounts:
+        raise RuntimeError(
+            f"WechRss 历史后端有 {len(incomplete_accounts)} 个公众号处理失败，"
+            f"详情见 {tools_log_dir / 'crawler.log'}"
+        )
+
+
 def execute(
     config: CrawlConfig,
     seed_urls: list[str],
@@ -1359,10 +1542,24 @@ def execute(
         stop_existing_on_close=stop_existing_service,
     )
     try:
-        service.start()
-        service.ensure_login(
-            on_qr=lambda path: send_login_qr(path, logger.info),
-        )
+        try:
+            service.start()
+            service.ensure_login(
+                on_qr=lambda path: send_login_qr(path, logger.info),
+            )
+        except Exception as exc:
+            report.crawl_backend = "wechrss"
+            report.history_complete = True
+            report.fallback_reason = str(exc)
+            logger.warning(
+                "wechat-mp-tools 历史后端不可用，切换到 WechRss 直连历史后端：%s",
+                exc,
+            )
+            service.close()
+            crawl_with_wechrss_history(
+                seed_urls, report, work_root, config, logger, tools_log_dir
+            )
+            return RESULTS_ROOT
         discovered_by_mp_id: dict[str, dict] = {}
         explicit_urls_by_mp_id: dict[str, list[str]] = {}
         resolved_by_url: dict[str, dict] = {}
@@ -1451,6 +1648,23 @@ def execute(
                 f"{len(incomplete_accounts)} 个公众号处理失败，"
                 f"详情见 {tools_log_dir / 'crawler.log'}"
             )
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        if report.crawl_backend != "wechat-mp-tools":
+            raise
+        logger.warning(
+            "wechat-mp-tools 在历史发现过程中失败，改用 WechRss 重新校验并继续：%s",
+            exc,
+        )
+        service.close()
+        report.accounts.clear()
+        report.crawl_backend = "wechrss"
+        report.history_complete = True
+        report.fallback_reason = str(exc)
+        crawl_with_wechrss_history(
+            seed_urls, report, work_root, config, logger, tools_log_dir
+        )
     finally:
         try:
             service.close()
@@ -1525,7 +1739,15 @@ def preflight(config: CrawlConfig) -> list[str]:
         raise RuntimeError(f"输入 CSV 不是普通文件：{config.input_csv}")
     if config.input_csv.suffix.lower() != ".csv":
         raise RuntimeError(f"输入文件必须是 CSV 格式：{config.input_csv}")
-    missing = [path for path in (MP_PYTHON, RSS_PYTHON, RSS_WORKER) if not path.exists()]
+    missing = [
+        path for path in (
+            MP_PYTHON,
+            RSS_PYTHON,
+            RSS_WORKER,
+            WECHRSS_PROJECT / "weread_auth.py",
+            WECHRSS_PROJECT / "wechat_mp_fetcher.py",
+        ) if not path.exists()
+    ]
     if missing:
         raise RuntimeError("缺少运行依赖: " + ", ".join(str(path) for path in missing))
     ensure_auth_layout(ROOT, MP_PROJECT, RSS_PROJECT)
@@ -1604,16 +1826,20 @@ def main() -> None:
                 tools_log_dir,
                 stop_existing_service=args.notify or args.scheduled,
             )
-        final_status = "成功"
+        final_status = "成功" if report.history_complete else "降级完成"
         logger.info("爬取结束，结果目录：%s", result_dir)
     except KeyboardInterrupt:
         final_status = "已中断"
         final_error = "用户中止爬取"
+        if report is not None:
+            report.history_complete = False
         logger.error("用户中止爬取")
         raise SystemExit(130)
     except Exception as exc:
         final_status = "失败"
         final_error = str(exc)
+        if report is not None:
+            report.history_complete = False
         logger.error("爬取未完成：%s", exc)
         raise SystemExit(1)
     finally:
@@ -1632,17 +1858,20 @@ def main() -> None:
                 if not final_error:
                     final_error = f"无法保存结果统计 CSV：{exc}"
             immediate_labeling = None
-            if final_status == "成功" and saved_record_dir is not None:
+            if final_status in {"成功", "降级完成"} and saved_record_dir is not None:
                 immediate_labeling = label_new_batch(saved_record_dir, logger)
             emit_final_result(
                 {
-                    "status": {"成功": "ok", "已中断": "interrupted"}.get(final_status, "failed"),
+                    "status": {"成功": "ok", "降级完成": "degraded", "已中断": "interrupted"}.get(final_status, "failed"),
                     "command": "crawl",
                     "run_id": report.stamp,
                     "mode": report.config.mode,
                     "account_count": len(report.accounts),
                     "new_article_count": sum(item.new_articles for item in report.accounts),
-                    "failed_account_count": sum(item.status != "成功" for item in report.accounts),
+                    "failed_account_count": sum(item.status in {"处理失败", "认证失败", "失败"} for item in report.accounts),
+                    "crawl_backend": report.crawl_backend,
+                    "history_complete": report.history_complete,
+                    "fallback_reason": report.fallback_reason or None,
                     "duration_seconds": round(report.duration_seconds, 3),
                     "record_dir": str(saved_record_dir) if saved_record_dir else None,
                     "summary_file": str(summary_path) if summary_path else None,

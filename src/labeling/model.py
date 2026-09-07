@@ -30,7 +30,7 @@ class DeadlineOutput(BaseModel):
 class ImportanceFactorsOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    deadline_urgency: Literal["high", "medium", "low", "unknown"]
+    deadline_urgency: Literal["high", "medium", "low", "expired", "unknown"]
     project_significance: Literal["high", "medium", "low", "unknown"]
     amount_level: Literal["high", "medium", "low", "unknown"]
     amount_raw_text: str

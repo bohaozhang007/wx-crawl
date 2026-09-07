@@ -145,6 +145,11 @@ Do not expand a partial-stage request into destructive cleanup or unrelated exte
 
 - Authentication or crawl failure blocks only the new crawl batch; a scheduled catch-up
   job may still process previously completed crawl batches.
+- Current crawl runs use `wechat-mp-tools` first and WechRss as the direct history fallback.
+  A successful fallback batch has `status=ok`, `crawl_backend=wechrss`, and
+  `history_complete=true`; process it exactly like a successful primary batch. Historical
+  `status=degraded` batches remain valid only for their actually archived explicit URLs and
+  must not be described as complete incremental crawls.
 - Label, selector, report, or database failure leaves that batch pending and preserves
   files; it must not prevent later independent batches from running.
 - Use URL/idempotency keys for retries; do not infer completion from an Agent narrative.

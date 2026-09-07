@@ -29,8 +29,10 @@ def ensure_auth_layout(root: Path, mp_project: Path, rss_project: Path) -> Path:
     config_dir = root / "src" / "auth" / "config"
     wechat_auth = config_dir / "wechat-mp-tools.yaml"
     rss_auth = config_dir / "we-mp-rss.yaml"
+    wechrss_auth = config_dir / "wechrss.json"
     _ensure_private_file(wechat_auth, "[]\n")
     _ensure_private_file(rss_auth, "{}\n")
+    _ensure_private_file(wechrss_auth, "{}\n")
     _ensure_runtime_link(mp_project / "data" / "account_pool.json", wechat_auth)
     _ensure_runtime_link(rss_project / "data" / "wx.lic", rss_auth)
     return config_dir

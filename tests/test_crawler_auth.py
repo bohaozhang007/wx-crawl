@@ -113,6 +113,17 @@ class NoAgentNotificationTest(unittest.TestCase):
         self.assertIn("no-agent 爬取完成", message)
         self.assertIn("新增文章：4 篇", message)
 
+    def test_no_agent_delivery_identifies_degraded_history(self):
+        message = delivery_message(
+            {
+                "status": "degraded", "command": "crawl", "run_id": "run-2",
+                "new_article_count": 1, "duration_seconds": 5, "record_dir": "/tmp/run-2",
+            },
+            0,
+        )
+        self.assertIn("降级抓取完成", message)
+        self.assertIn("历史列表：本轮未更新", message)
+
     def test_success_message_uses_compact_crawl_summary(self):
         message = crawl_status_message(
             {
@@ -125,6 +136,7 @@ class NoAgentNotificationTest(unittest.TestCase):
             }
         )
         self.assertIn("新增文章：8 篇", message)
+        self.assertIn("历史后端：wechat-mp-tools", message)
         self.assertIn("耗时：25.0 分钟", message)
         self.assertNotIn("account_summary", message)
 
@@ -137,6 +149,11 @@ class NoAgentNotificationTest(unittest.TestCase):
         notify.assert_called_once()
         emit.assert_called_once()
         self.assertEqual(payload["notification"], "sent")
+
+    def test_failed_history_is_not_reported_complete(self):
+        report = cli.RunReport(config=cli.CrawlConfig(Path("input.csv"), "incremental", 10))
+        report.history_complete = False
+        self.assertFalse(report.history_complete)
 
     def test_pipeline_stage_messages_are_compact_aggregates(self):
         label = pipeline_stage_message(
@@ -201,6 +218,26 @@ class IncrementalLookbackTest(unittest.TestCase):
             cli.extract_source_publish_time('var publish_time = "1786007756000";'),
             1786007756,
         )
+
+    def test_secondary_history_fetcher_stops_at_existing_url(self):
+        now = datetime(2026, 8, 14, 12, 0, tzinfo=cli.LOCAL_TIMEZONE)
+        timestamp = int(now.timestamp())
+        existing_url = "https://mp.weixin.qq.com/s/existing"
+        pages = {
+            0: [
+                {"link": "https://mp.weixin.qq.com/s/new", "title": "new", "publish_time": timestamp},
+                {"link": existing_url, "title": "existing", "publish_time": timestamp - 1},
+            ]
+        }
+        candidates = cli.collect_history_candidates_with_fetcher(
+            lambda begin: pages.get(begin, []),
+            self.config(),
+            {cli.article_url_key(existing_url)},
+            {},
+            logging.getLogger("test"),
+            now=now,
+        )
+        self.assertEqual([item[2]["title"] for item in candidates], ["new"])
 
     def test_incremental_lookback_boundary_uses_publish_time_in_beijing(self):
         now = datetime(2026, 8, 14, 0, 6, 15, tzinfo=cli.LOCAL_TIMEZONE)

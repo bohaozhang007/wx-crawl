@@ -1,4 +1,4 @@
-profile_version: "1.1"
+profile_version: "1.2"
 
 matching_policy:
   require_task_scope: true
@@ -10,6 +10,17 @@ matching_policy:
     robotic_arm_implies_robot: false
     large_model_implies_embodied_ai: false
     drone_implies_aerospace: false
+  excluded_task_families:
+    satellite_application:
+      scope: [卫星平台, 卫星载荷, 卫星数据, 遥感, 卫星通信, 卫星导航, 星座]
+      rule: >-
+        当课题核心对象是卫星本体或卫星数据/遥感/通信/导航应用时，整体不属于目标范围；
+        即使任务使用人工智能、智能体、多模态大模型或其他目标技术作为数据处理和赋能工具，
+        也不得据此标记大模型、具身智能或空天。
+      exception: >-
+        任务明确研究太空机器人或机械臂，并以在轨/太空装配、制造、建造、维修、维护、
+        检修、抓取、操作或服务为核心研究对象时不适用本排除项；应按机器人、机械臂及
+        实际成立的空天方向正常判断。
 
 domains:
   无人机:
@@ -38,7 +49,7 @@ domains:
     task_patterns: [航天器, 运载火箭, 空间飞行器, 深空探测, 在轨服务, 航空航天系统]
     supporting_terms: [火箭, 飞船, 空间站, 临近空间]
     insufficient_terms: [空间, 天空, 航空, 飞行]
-    exclusions: [数据空间, 网络空间, 地理空间]
+    exclusions: [数据空间, 网络空间, 地理空间, 卫星数据应用, 卫星遥感应用, 卫星通信应用, 卫星导航应用, 星座应用]
 
   机器人:
     direct_terms: [机器人, robot, 人形机器人, 四足机器人, 工业机器人, 服务机器人]

@@ -252,7 +252,7 @@ def validate_payload(
                 errors.append("importance.factors has invalid keys")
             else:
                 allowed = {
-                    "deadline_urgency": {"high", "medium", "low", "unknown"},
+                    "deadline_urgency": {"high", "medium", "low", "expired", "unknown"},
                     "project_significance": {"high", "medium", "low", "unknown"},
                     "amount_level": {"high", "medium", "low", "unknown"},
                     "domain_fit": {"strong", "medium", "weak", "none"},

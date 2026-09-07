@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from src.labeling.schema import load_tree_spec, validate_payload
 from src.storage import db
 
@@ -96,6 +98,19 @@ class LabelSchemaV2Test(unittest.TestCase):
         errors = validate_payload(payload)
         self.assertTrue(any("unknown values: 卫星" in error for error in errors))
         self.assertNotIn("卫星", db.DOMAINS)
+
+    def test_satellite_application_exclusion_preserves_space_robotics_exception(self) -> None:
+        profile = yaml.safe_load(
+            (ROOT / "skill/label-wechat-articles/references/research-profile.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        policy = profile["matching_policy"]["excluded_task_families"]["satellite_application"]
+        self.assertIn("卫星数据", policy["scope"])
+        self.assertIn("大模型", policy["rule"])
+        self.assertIn("机械臂", policy["exception"])
+        self.assertIn("装配", policy["exception"])
+        self.assertIn("维修", policy["exception"])
 
     def test_summary_is_optional_for_existing_v2_but_validated_when_present(self) -> None:
         payload = label_payload(
