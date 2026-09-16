@@ -45,11 +45,20 @@ class ImportanceOutput(BaseModel):
     factors: ImportanceFactorsOutput
 
 
+class GeographyOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["eligible", "out_of_scope", "unclear"]
+    regions: list[Literal["national", "beijing", "zhejiang", "other", "unknown"]]
+    evidence: str
+
+
 class LabelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[2]
     tree_version: str
+    profile_version: str
+    geography: GeographyOutput
     decision: Literal["KEEP", "DROP", "REVIEW"]
     decision_path: list[str]
     reason_code: str
@@ -84,8 +93,13 @@ def _usage_from_response(response) -> dict:
 
 
 class OpenAILabelModel:
-    def __init__(self, config: LabelingConfig) -> None:
+    def __init__(self, config: LabelingConfig, *, max_output_tokens: int | None = None) -> None:
+        if max_output_tokens is None:
+            max_output_tokens = config.max_output_tokens
+        if max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
         self.config = config
+        self.max_output_tokens = max_output_tokens
         self.model = config.model
         self.client = AsyncOpenAI(
             api_key=config.api_key,
@@ -137,11 +151,12 @@ class OpenAILabelModel:
                 {"role": "user", "content": content},
             ],
             response_format={"type": "json_object"},
-            max_tokens=4096,
+            max_tokens=self.max_output_tokens,
         )
         raw = response.choices[0].message.content
         if not raw:
-            raise RuntimeError("model returned empty JSON content")
+            finish_reason = getattr(response.choices[0], "finish_reason", "unknown")
+            raise RuntimeError(f"model returned empty JSON content (finish_reason={finish_reason})")
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:

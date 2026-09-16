@@ -1,4 +1,8 @@
 crawl:
+  # TikHub V2 历史列表；legacy 仅供手动回滚旧微信读书后端。
+  history_backend: tikhub
+  # 每轮所有 TikHub 付费请求总上限（含身份、列表、正文兜底），不自动重试。
+  tikhub_max_requests: 120
   # 本次输入 CSV 路径。可以使用任意列结构，程序会扫描所有单元格中的公众号文章链接。
   # 相对路径以项目顶层目录为基准。
   # 识别出的公众号会更新到 account_sources.csv；输入的具体文章也会加入本次抓取。
@@ -20,6 +24,8 @@ crawl:
   incremental_max_days: 1
 
 labeling:
+  # 为推理过程和 JSON 标签留足输出空间，沿用已通过抽样的上限。
+  max_output_tokens: 16384
   # 默认继承 Hermes Agent 当前的 provider、model、base_url 和对应 API Key。
   # 以下三项留空即可；只有希望打标使用不同模型时才填写。
   # 环境变量 LABEL_PROVIDER、LABEL_MODEL、LABEL_BASE_URL、LABEL_API_KEY 优先级最高。

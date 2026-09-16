@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from functools import lru_cache
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,8 @@ EVIDENCE_TYPES = ("solicitation", "research_task", "domain", "negative", "missin
 REQUIRED_KEYS = {
     "schema_version",
     "tree_version",
+    "profile_version",
+    "geography",
     "decision",
     "decision_path",
     "reason_code",
@@ -41,7 +43,6 @@ class LabelSchemaError(ValueError):
     """Raised when the decision-tree contract itself cannot be loaded."""
 
 
-@lru_cache(maxsize=4)
 def load_tree_spec(path: str | Path = DECISION_TREE_PATH) -> dict[str, Any]:
     tree_path = Path(path)
     try:
@@ -80,6 +81,21 @@ def load_tree_spec(path: str | Path = DECISION_TREE_PATH) -> dict[str, Any]:
         "terminals": terminals,
         "path": str(tree_path),
     }
+
+
+def load_profile_version() -> str:
+    path = DECISION_TREE_PATH.parent / "research-profile.yaml"
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    version = value.get("profile_version") if isinstance(value, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        raise LabelSchemaError("research-profile.yaml must declare profile_version")
+    return version
+
+
+def current_contract() -> dict[str, Any]:
+    return {"label_schema_version": SCHEMA_VERSION,
+            "tree_version": load_tree_spec()["version"],
+            "profile_version": load_profile_version()}
 
 
 def _validate_path(value: Any, spec: dict[str, Any], reason_code: Any) -> list[str]:
@@ -132,6 +148,30 @@ def validate_payload(
         errors.append(f"schema_version must be {SCHEMA_VERSION}; legacy labels must be relabeled")
     if payload.get("tree_version") != spec["version"]:
         errors.append(f"tree_version must be {spec['version']}")
+
+    if payload.get("profile_version") != load_profile_version():
+        errors.append(f"profile_version must be {load_profile_version()}; relabel unverified labels")
+
+    geography = payload.get("geography")
+    if not isinstance(geography, dict) or set(geography) != {"status", "regions", "evidence"}:
+        errors.append("geography must contain exactly status, regions, evidence")
+    else:
+        status, regions, evidence = geography.get("status"), geography.get("regions"), geography.get("evidence")
+        if status not in {"eligible", "out_of_scope", "unclear"}:
+            errors.append("geography.status is not allowed")
+        allowed = {"national", "beijing", "zhejiang"}
+        if not isinstance(regions, list) or not regions or any(not isinstance(v, str) or v not in allowed | {"other", "unknown"} for v in regions):
+            errors.append("geography.regions must contain allowed region codes")
+        elif status == "eligible" and (not allowed.intersection(regions) or "unknown" in regions):
+            errors.append("eligible geography needs national, beijing or zhejiang evidence")
+        if not isinstance(evidence, str) or (status != "unclear" and not evidence.strip()):
+            errors.append("geography.evidence must quote source text for a confirmed scope")
+        if payload.get("decision") == "KEEP" and status != "eligible":
+            errors.append("KEEP requires eligible geography")
+        if payload.get("reason_code") == "G1-D1" and status != "out_of_scope":
+            errors.append("G1-D1 requires out_of_scope geography")
+        if payload.get("reason_code") == "G1-R1" and status != "unclear":
+            errors.append("G1-R1 requires unclear geography")
 
     decision = payload.get("decision")
     if decision not in DECISIONS:
@@ -222,6 +262,8 @@ def validate_payload(
             errors.append("domains is not in canonical order")
 
     if decision == "KEEP":
+        if "G1:PASS" not in (payload.get("decision_path") or []):
+            errors.append("KEEP requires passing the G1 geography gate")
         if application_type not in POSITIVE_APPLICATION_TYPES:
             errors.append("KEEP requires a research project or guide application_type")
         if not isinstance(domains, list) or not domains:

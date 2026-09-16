@@ -7,8 +7,12 @@ import json
 import os
 import tempfile
 import time
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from src.labeling.schema import current_contract
 
 RECORD_ROOT = Path("/root/workspace/wx-crawl/results/record")
 STATE_NAME = "pipeline_state.json"
@@ -36,18 +40,24 @@ def load_coverage() -> set[str]:
     path = RECORD_ROOT / "pipeline_coverage.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return set(data.get("covered_run_ids", []))
+        return set(data.get("covered_run_ids", [])) if data.get("label_contract") == current_contract() else set()
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return set()
 
 
 def is_completed(path: Path) -> bool:
     state = read_state(path)
-    return (state.get("status") == "completed" and state.get("schema_version") == SCHEMA_VERSION and all(state.get("stages", {}).get(stage) == "completed" for stage in ("label", "report", "database", "cleanup", "ai_table_sync"))) or path.name in load_coverage()
+    return (state.get("label_contract") == current_contract() and state.get("status") == "completed" and state.get("schema_version") == SCHEMA_VERSION and all(state.get("stages", {}).get(stage) == "completed" for stage in ("label", "report", "database", "cleanup", "ai_table_sync"))) or path.name in load_coverage()
 
 
 def write_state(path: Path, *, selected: int | None = None, imported: dict[str, Any] | None = None, sync: dict[str, Any] | None = None) -> None:
+    report_path = path / "filtered_articles.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    contract = current_contract()
+    if any(report.get(key) != value for key, value in contract.items()):
+        raise RuntimeError("cannot complete batch: report uses unverified or stale labeling rules")
     payload: dict[str, Any] = {
+        "label_contract": contract,
         "schema_version": SCHEMA_VERSION,
         "status": "completed",
         "run_id": path.name,

@@ -139,3 +139,67 @@ terminal(command="python3 -m py_compile skill/wechat-ai-table-sync/scripts/sync_
 
 A successful result includes real JSON counts and a post-write readback, not
 merely a successful Python process exit.
+
+## Current-version validation before sync
+
+Before creating remote fields or mutating rows, the sync CLI verifies local source
+labels against the current schema/tree and checks KEEP, application_type, domains
+and summary against the SQLite selection. Missing/outdated/inconsistent evidence
+blocks sync; rows are not silently omitted or deleted. A converged row count is not
+a version audit. Historical records need relabeling and database reconciliation
+before sync can resume. Read-only SQLite queries remain available for audit/dedup.
+
+
+## Latest labeling contract (2026-09-08)
+
+Read authoritative versions from `src.labeling.schema.current_contract()` on each run.
+Currently label schema is 2, decision tree is 1.2, research profile is 1.3; these
+are independent versions. Every label must include `profile_version` as well as
+`schema_version` and `tree_version`. Missing or old versions require actual
+relabeling; never stamp a new version onto an old decision.
+
+Reports carry `label_schema_version`, `tree_version`, and `profile_version`, even
+when empty. Import rejects old reports and revalidates the source KEEP label;
+SQLite stores that full validated label as provenance. Sync and deadline reminders
+verify current decisions before any outbound action. Count equality alone does
+not certify rule-version consistency. Old or unavailable source decisions require
+relabeling/reconciliation, not silent acceptance or deletion.
+
+Completion and backfill coverage are reusable only when their `label_contract`
+equals the current contract. Old unversioned markers do not certify completion.
+Use `pipeline_state.py list-pending --json` for pending discovery; do not independently
+skip a batch merely because its status says completed or its ID appears in coverage.
+For pruned archives, recover source articles before reclassification; report the
+migration as blocked until evidence is restored. Do not repeatedly retry missing
+source data or declare a global migration complete based on a new batch.
+
+
+## Geographic scope gate (2026-09-16)
+
+Current authoritative contract: schema=2, tree=1.2, profile=1.3. Read current_contract()
+instead of pinning these example versions. geography is required, with status
+eligible/out_of_scope/unclear, regions (national/beijing/zhejiang/other/unknown),
+and verbatim evidence. KEEP must pass G1 and have eligible geography with evidence.
+The tree/profile upgrade invalidates historical labels without geographic review;
+never stamp new versions or infer national scope from a national sponsor alone.
+
+Only nationwide national programs and Beijing/Zhejiang local programs (including
+subordinate cities/districts) are eligible. Other regional special programs, including
+NSFC regional innovation joint fund (Jiangxi), are excluded even if national bodies
+sponsor them or applicants nationwide may participate. Publisher location, event
+venue, collaborator addresses and incidental region mentions are not project scope.
+Mixed guides require a clearly independent eligible track with source evidence.
+Unclear geographic scope means REVIEW, no selection/import/high alert/deadline alert.
+Unknown deadlines still pass the separate deadline gate; do not confuse the two.
+
+Selection reports include geography, and import compares it to the validated source.
+Reminder scheduling and dispatch exclude other/unclassified geography, cancel pending
+reminders, and report skipped_geography. Verified relabeling and reimport can restore
+reminders cancelled solely for missing geography. No direct Agent reminder sends may
+bypass these program checks. Existing historical DB/table records are not silently
+removed; reconcile them against new labels before syncing. Do not claim old records
+or completion/coverage markers meet the new contract. Preserve migration progress.
+
+The manual label writer now requires --geography with a JSON object, for example
+'{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
+Evidence must be from the actual article, not copied from this example.

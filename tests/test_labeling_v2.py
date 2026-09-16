@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from src.labeling.schema import load_profile_version
 from src.labeling.schema import load_tree_spec, validate_payload
 from src.storage import db
 
@@ -39,8 +40,10 @@ def label_payload(
     return {
         "schema_version": 2,
         "tree_version": load_tree_spec()["version"],
+        "profile_version": load_profile_version(),
+        "geography": {"status":"eligible","regions":["national"],"evidence":"研发多模态大模型训练方法"},
         "decision": decision,
-        "decision_path": path,
+        "decision_path": (["G1:PASS"] + path) if decision == "KEEP" and "G1:PASS" not in path else path,
         "reason_code": reason_code,
         "reason": "这是针对当前文章内容给出的具体判断原因。",
         "deadline": {"status": "missing", "raw_text": "", "timestamp": None, "timezone": "Asia/Shanghai"},

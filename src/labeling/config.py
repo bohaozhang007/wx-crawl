@@ -30,6 +30,7 @@ class LabelingConfig:
     concurrency: int
     timeout_seconds: float
     max_retries: int
+    max_output_tokens: int = 4096
 
 
 def _positive_int(value: Any, name: str, *, allow_zero: bool = False) -> int:
@@ -190,4 +191,5 @@ def load_labeling_config(
         concurrency=concurrency,
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
+        max_output_tokens=_positive_int(labeling.get("max_output_tokens", 4096), "max_output_tokens"),
     )

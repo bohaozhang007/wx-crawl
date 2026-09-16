@@ -20,6 +20,7 @@ from .runner import (
     resolve_run_dir,
     run_labeling,
 )
+from .schema import load_profile_version
 from .schema import load_tree_spec
 from .importance_alerts import notify_high_importance
 
@@ -74,6 +75,17 @@ def write_usage(payload: dict, run_dir: Path | None) -> Path | None:
     """
     usage = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(usage, dict):
+        return None
+    # Zero-call runs (every article skipped_valid) must NEVER overwrite an
+    # existing usage file: a later pipeline pass over an already-labeled batch
+    # would otherwise erase the usage written by the crawl-time immediate
+    # labeling earlier the same day (observed 2026-09-08: 54 run dirs zeroed,
+    # ~429 direct label calls / ~¥11 missing from the daily report).
+    if int(usage.get("calls") or 0) == 0 and not usage.get("per_article"):
+        if run_dir is not None:
+            existing = run_dir / "labeling_usage.json"
+            if existing.exists():
+                return existing
         return None
     if run_dir is not None:
         path = run_dir / "labeling_usage.json"
@@ -149,6 +161,7 @@ def main() -> int:
                     "timeout_seconds": config.timeout_seconds,
                     "max_retries": config.max_retries,
                     "tree_version": tree["version"],
+                    "profile_version": load_profile_version(),
                     "decision_nodes": len(tree["nodes"]),
                     "article_root": str(ARTICLES_ROOT),
                     "run_dir": str(resolved_run) if resolved_run else None,

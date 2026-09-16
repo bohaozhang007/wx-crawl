@@ -14,7 +14,9 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from src.auth.dingtalk_notify import send_deadline_reminders
-from src.storage.db import DEFAULT_DB_PATH, init_database
+from src.storage.db import DEFAULT_DB_PATH, init_database, query_articles
+from src.labeling.current_version import require_current_selection
+from src.labeling.eligibility import geography_eligible
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,8 +42,15 @@ def reconcile_records(db_path: Path, *, now: int | None = None, config: dict | N
     now = int(now or time.time())
     cfg = config or settings()
     init_database(db_path)
+    candidates = [row for row in query_articles(db_path, limit=1000000)
+                  if row.get("deadline_status") == "confirmed" and (row.get("deadline_at") or 0) > now]
+    blocked_ids = {row["id"] for row in candidates if not geography_eligible(row.get("label") or {})}
+    candidates = [row for row in candidates if row["id"] not in blocked_ids]
+    if cfg["enabled"]:
+        require_current_selection(candidates)
     with sqlite3.connect(db_path) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
+        connection.executemany("UPDATE deadline_reminders SET status='cancelled', response='geography excluded or unverified' WHERE article_id=? AND status IN ('pending','failed')", [(value,) for value in blocked_ids])
         connection.execute(
             """UPDATE deadline_reminders SET status='cancelled'
                WHERE status IN ('pending','failed') AND article_id IN (
@@ -59,11 +68,21 @@ def reconcile_records(db_path: Path, *, now: int | None = None, config: dict | N
         )
         created = 0
         if cfg["enabled"]:
+            # A verified relabel may restore a previously unclassified opportunity.
+            connection.executemany(
+                """UPDATE deadline_reminders SET status='pending', attempts=0, response='', remind_at=?
+                   WHERE article_id=? AND deadline_at=? AND status='cancelled'
+                     AND response='geography excluded or unverified'""",
+                [(max(now + 5, row["deadline_at"] - cfg["days_before"] * 86400), row["id"], row["deadline_at"]) for row in candidates],
+            )
+        if cfg["enabled"]:
             rows = connection.execute(
                 "SELECT id, deadline_at FROM articles WHERE deadline_status='confirmed' AND deadline_at>?",
                 (now,),
             ).fetchall()
             for article_id, deadline_at in rows:
+                if article_id in blocked_ids:
+                    continue
                 remind_at = max(now + 5, int(deadline_at) - cfg["days_before"] * 86400)
                 cursor = connection.execute(
                     """INSERT OR IGNORE INTO deadline_reminders(
@@ -77,7 +96,7 @@ def reconcile_records(db_path: Path, *, now: int | None = None, config: dict | N
                WHERE status IN ('pending','failed') AND attempts < ?""",
             (cfg["max_attempts"],),
         ).fetchone()
-    return {"created": created, "next_remind_at": next_row[0] if next_row else None}
+    return {"created": created, "skipped_geography": len(blocked_ids), "next_remind_at": next_row[0] if next_row else None}
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -137,10 +156,16 @@ def dispatch(db_path: Path, *, now: int | None = None) -> dict:
                  AND a.deadline_at>? ORDER BY a.deadline_at, a.id""",
             (now, cfg["max_attempts"], now),
         ).fetchall()
-        items = [dict(row) for row in rows]
+        database_rows = {row["id"]: row for row in query_articles(db_path, limit=1000000)}
+        blocked = [dict(row) for row in rows if not geography_eligible(database_rows[row["article_id"]].get("label") or {})]
+        blocked_ids = {row["reminder_id"] for row in blocked}
+        connection.executemany("UPDATE deadline_reminders SET status='cancelled', response='geography excluded or unverified' WHERE id=?", [(value,) for value in blocked_ids])
+        items = [dict(row) for row in rows if row["reminder_id"] not in blocked_ids]
         if not items:
-            return {"due": 0, "sent": 0}
+            return {"due": len(rows), "sent": 0, "skipped_geography": len(blocked)}
         try:
+            due_ids = {item["article_id"] for item in items}
+            require_current_selection([row for row in query_articles(db_path, limit=1000000) if row["id"] in due_ids])
             response = send_deadline_reminders(items)
         except Exception as exc:
             for item in items:
@@ -156,10 +181,10 @@ def dispatch(db_path: Path, *, now: int | None = None) -> dict:
                 "UPDATE deadline_reminders SET status='sent', attempts=attempts+1, sent_at=?, response=? WHERE id=?",
                 [(now, response[:1000], value) for value in ids],
             )
-    return {"due": len(items), "sent": len(items)}
+    return {"due": len(rows), "sent": len(items), "skipped_geography": len(blocked)}
 
 
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser(description="Manage one persistent no-agent deadline timer")
     parser.add_argument("command", choices=("reconcile", "dispatch", "status"))
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
@@ -176,6 +201,14 @@ def main() -> int:
     failed = int(result.get("failed", 0) or 0)
     print(json.dumps({"status": "failed" if failed else "ok", "command": args.command, **result}, ensure_ascii=False, separators=(",", ":")))
     return 1 if failed else 0
+
+
+def main() -> int:
+    try:
+        return _main()
+    except RuntimeError as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False, separators=(",", ":")))
+        return 1
 
 
 if __name__ == "__main__":

@@ -132,7 +132,7 @@ stage notifications; it reports only the final compact execution JSON.
 When the user requests only one stage, run only that stage and its required read-only
 precondition checks:
 
-- crawl: run `./run.sh` once; authentication and QR handling are internal; the crawler
+- crawl: run `./run.sh` once; TikHub V2 history requires no WeRead login or QR; the crawler
   immediately labels its newly recorded batch and sends high-importance alerts itself;
 - label: require a specific `run_dir`, run the Python labeler, then report its counts;
 - select: require zero pending labels, run `matches`, and report the ledger path;
@@ -145,13 +145,115 @@ Do not expand a partial-stage request into destructive cleanup or unrelated exte
 
 - Authentication or crawl failure blocks only the new crawl batch; a scheduled catch-up
   job may still process previously completed crawl batches.
-- Current crawl runs use `wechat-mp-tools` first and WechRss as the direct history fallback.
-  A successful fallback batch has `status=ok`, `crawl_backend=wechrss`, and
-  `history_complete=true`; process it exactly like a successful primary batch. Historical
-  `status=degraded` batches remain valid only for their actually archived explicit URLs and
-  must not be described as complete incremental crawls.
+- Current crawl runs default to TikHub V2 HTTP history (`crawl_backend=tikhub`).
+  wechat-mp-tools and we-mp-rss only download bodies; paid TikHub detail is the last
+  body fallback. Do not start old WeRead services or ask for QR login. Successful
+  `status=ok, history_complete=true` means the configured history scope completed.
+  Historical successful `crawl_backend=wechrss` batches remain eligible for processing.
+  A failed current crawl must not be reported as a completed full batch.
 - Label, selector, report, or database failure leaves that batch pending and preserves
   files; it must not prevent later independent batches from running.
 - Use URL/idempotency keys for retries; do not infer completion from an Agent narrative.
 - A successful report includes run IDs, labeling counts, pending/review/selected counts,
   ledger path and count, database results, cleanup results, and sync/readback results.
+
+For TikHub identity failures, the crawler owns bounded alternate-article/search
+recovery and validates numeric biz before caching. Do not repeatedly retry the same
+HTTP 400 seed, infer account identity from its name alone, or revert to WeRead login.
+Crawl failure may coexist with archived articles; retain the original per-run CSV
+and pending stage state when a separate recovery crawl repairs only failed accounts.
+
+Every stage must use the current label schema (2) and repository decision-tree
+version (currently 1.1). A historical tree_version=1.0 is not schema v1, but is still
+invalid for current selection. Old tags remain pending until full-text relabeling;
+never just update the version field. A zero-selection completed batch requires zero
+pending labels. Existing database/AI-table count convergence does not establish
+current-version compliance; sync is blocked if source labels cannot verify it.
+
+
+## Latest labeling contract (2026-09-08)
+
+Read authoritative versions from `src.labeling.schema.current_contract()` on each run.
+Currently label schema is 2, decision tree is 1.2, research profile is 1.3; these
+are independent versions. Every label must include `profile_version` as well as
+`schema_version` and `tree_version`. Missing or old versions require actual
+relabeling; never stamp a new version onto an old decision.
+
+Reports carry `label_schema_version`, `tree_version`, and `profile_version`, even
+when empty. Import rejects old reports and revalidates the source KEEP label;
+SQLite stores that full validated label as provenance. Sync and deadline reminders
+verify current decisions before any outbound action. Count equality alone does
+not certify rule-version consistency. Old or unavailable source decisions require
+relabeling/reconciliation, not silent acceptance or deletion.
+
+Completion and backfill coverage are reusable only when their `label_contract`
+equals the current contract. Old unversioned markers do not certify completion.
+Use `pipeline_state.py list-pending --json` for pending discovery; do not independently
+skip a batch merely because its status says completed or its ID appears in coverage.
+For pruned archives, recover source articles before reclassification; report the
+migration as blocked until evidence is restored. Do not repeatedly retry missing
+source data or declare a global migration complete based on a new batch.
+
+### Pruned-dir batches are permanently wedged at write-report (observed 2026-09-10)
+
+`select_articles.py` records every `article directory not found` row as
+`selection: pending` (~L304-322), so `write-report` raises
+`cannot write completed report: N articles have missing/invalid/...` for any legacy
+batch whose dirs an earlier `prune --confirm-delete` removed. Observed: 40 batches /
+4779 ledger entries / 4243 pending rows; only 101 rows had a cross-account surviving
+copy and ~34 unique URLs were recoverable from ledgers — the rest have **no URL
+anywhere** (`article_details.csv` stores only 公众号名称/标题/发布时间, and
+`processing_status_final.json`'s `unmatched` list is URL-less too).
+`process_pending_batches.py` reproduces the identical failure on every retry
+(label finds 0 candidates, select fails, three aggregate stage notifications re-send),
+so retrying is not a fix. Resolution requires either (a) a recovery crawl that
+re-archives the articles (window mode reaches only the newest `articles_per_account`;
+incremental `incremental_max_days: 1` never reaches older posts), or (b) explicit user
+approval to treat those batches as superseded. Never weaken the gate and never report
+those batches complete; instead confirm the knowledge base is intact (all archive dirs
+carry the current contract; KEEP-dir URL set == SQLite URL set).
+
+
+## Deadline eligibility gate (2026-09-08)
+
+Before selecting an opportunity or sending a high-importance alert, evaluate its
+structured deadline against the current clock using src.labeling.eligibility.deadline_expired.
+A confirmed positive timestamp at or before now excludes the article, regardless
+of KEEP/high or project significance. Future, missing and ambiguous deadlines
+pass this gate and still require the normal decision/importance checks. Do not
+infer expiration from an ambiguous date or the model's cached urgency factor.
+The selector records selection=expired; alerts report skipped_expired. Import
+rechecks expiration to reject reports that became stale after selection. Retain
+source labels and archives; do not rewrite the model decision merely due to time.
+This is a dynamic downstream filter, not a new label schema/tree/profile version.
+
+
+## Geographic scope gate (2026-09-16)
+
+Current authoritative contract: schema=2, tree=1.2, profile=1.3. Read current_contract()
+instead of pinning these example versions. geography is required, with status
+eligible/out_of_scope/unclear, regions (national/beijing/zhejiang/other/unknown),
+and verbatim evidence. KEEP must pass G1 and have eligible geography with evidence.
+The tree/profile upgrade invalidates historical labels without geographic review;
+never stamp new versions or infer national scope from a national sponsor alone.
+
+Only nationwide national programs and Beijing/Zhejiang local programs (including
+subordinate cities/districts) are eligible. Other regional special programs, including
+NSFC regional innovation joint fund (Jiangxi), are excluded even if national bodies
+sponsor them or applicants nationwide may participate. Publisher location, event
+venue, collaborator addresses and incidental region mentions are not project scope.
+Mixed guides require a clearly independent eligible track with source evidence.
+Unclear geographic scope means REVIEW, no selection/import/high alert/deadline alert.
+Unknown deadlines still pass the separate deadline gate; do not confuse the two.
+
+Selection reports include geography, and import compares it to the validated source.
+Reminder scheduling and dispatch exclude other/unclassified geography, cancel pending
+reminders, and report skipped_geography. Verified relabeling and reimport can restore
+reminders cancelled solely for missing geography. No direct Agent reminder sends may
+bypass these program checks. Existing historical DB/table records are not silently
+removed; reconcile them against new labels before syncing. Do not claim old records
+or completion/coverage markers meet the new contract. Preserve migration progress.
+
+The manual label writer now requires --geography with a JSON object, for example
+'{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
+Evidence must be from the actual article, not copied from this example.

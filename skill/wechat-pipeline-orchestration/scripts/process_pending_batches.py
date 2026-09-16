@@ -18,6 +18,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.auth.dingtalk_notify import send_pipeline_stage
+from src.labeling.schema import current_contract
 
 STATE = REPO / "skill/wechat-pipeline-orchestration/scripts/pipeline_state.py"
 SELECTOR = REPO / "skill/article-label-export/scripts/select_articles.py"
@@ -76,7 +77,7 @@ def is_covered_by_backfill(path: Path) -> bool:
     coverage = RECORD / "pipeline_coverage.json"
     try:
         data = json.loads(coverage.read_text(encoding="utf-8"))
-        return path.name in set(data.get("covered_run_ids", []))
+        return data.get("label_contract") == current_contract() and path.name in set(data.get("covered_run_ids", []))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return False
 

@@ -70,6 +70,11 @@ def load_rows(db_path: Path) -> list[dict[str, Any]]:
     rows = json.loads(completed.stdout)
     if not isinstance(rows, list):
         raise RuntimeError("wx-crawl-db list returned invalid JSON")
+    import sys
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from src.labeling.current_version import require_current_selection
+    require_current_selection(rows)
     return rows
 
 
@@ -158,9 +163,10 @@ def main() -> int:
     parser.add_argument("--sheet-id", default=SHEET_ID)
     parser.add_argument("--operator-id", default=OPERATOR_UNION_ID)
     args = parser.parse_args()
+    rows = load_rows(args.db)  # Validate before any remote schema or row mutation.
     api = NotableAPI(args.base_id, args.sheet_id, args.operator_id)
     api.ensure_fields(TABLE_FIELDS)
-    result = sync_rows(api, load_rows(args.db), args.mode)
+    result = sync_rows(api, rows, args.mode)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

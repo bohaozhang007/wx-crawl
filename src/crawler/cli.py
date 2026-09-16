@@ -167,6 +167,8 @@ class CrawlConfig:
     incremental_max_days: int = 1
     attachment_timeout_seconds: int = 30
     attachment_max_mb: int = 50
+    history_backend: str = "legacy"
+    tikhub_max_requests: int = 120
 
 
 @dataclass
@@ -645,8 +647,16 @@ def load_config() -> CrawlConfig:
         raise RuntimeError("config.yaml 缺少有效的 crawl.incremental_max_days") from exc
     if max_days < 1:
         raise RuntimeError("crawl.incremental_max_days 必须大于 0")
+    backend = str(crawl.get("history_backend", "tikhub"))
+    if backend not in {"tikhub", "legacy"}:
+        raise RuntimeError("crawl.history_backend 必须是 tikhub 或 legacy")
+    request_limit = int(crawl.get("tikhub_max_requests", 120))
+    if request_limit < 1:
+        raise RuntimeError("crawl.tikhub_max_requests 必须大于 0")
     return CrawlConfig(
         input_csv=input_csv,
+        history_backend=backend,
+        tikhub_max_requests=request_limit,
         mode=mode,
         articles_per_account=value,
         incremental_max_days=max_days,
@@ -1293,11 +1303,13 @@ def crawl_account(
     tools_log_dir: Path,
     explicit_urls: list[str],
     history_page_fetcher: Callable[[int], list[dict]] | None = None,
+    body_downloader=None,
+    stored_keys: set[str] | None = None,
 ) -> int:
     label = account.label
     account_dir = reconcile_account_directory(account)
     existing_articles = existing_article_index(account_dir)
-    existing_keys = set(existing_articles)
+    existing_keys = set(existing_articles) | (stored_keys or set())
     logger.info("公众号 %s 已有 %d 篇可按 URL 识别的文章", account.name, len(existing_keys))
     if history_page_fetcher is None:
         history_candidates = collect_history_candidates(
@@ -1332,6 +1344,7 @@ def crawl_account(
     candidates_dir = account_work / "candidates"
     candidates_dir.mkdir()
     successes = 0
+    failed_bodies = []
     try:
         for url, url_key, history in candidates:
             title_hint = str(history.get("title") or "未命名").strip()
@@ -1341,30 +1354,40 @@ def crawl_account(
             primary: dict = {}
             article_dir = candidate_parent / safe_component(title_hint, 60)
             try:
-                try:
-                    primary, article_dir = primary_download(url, title_hint, candidate_parent)
-                except Exception as exc:
-                    primary = {"success": False, "error": f"首选下载器异常: {exc}"}
-                    article_dir.mkdir(parents=True, exist_ok=True)
-                actual_title = str(primary.get("title") or title_hint).strip()
-                result = validate_article(article_dir, actual_title) if primary.get("success") else None
-                if result is None or not result.success:
-                    reason = result.reason if result else primary.get("error", "正文下载失败")
-                    logger.info("%s：首选正文不完整（%s），尝试 we-mp-rss", title_hint, reason)
-                    run_fallback(url, actual_title, article_dir, logger, tools_log_dir)
-                    fallback_title = str(
-                        read_json(article_dir / "fallback_metadata.json").get("title") or ""
-                    ).strip()
-                    if fallback_title:
-                        actual_title = fallback_title
+                if body_downloader is not None:
+                    primary, article_dir = body_downloader(url, title_hint, candidate_parent)
+                    actual_title = str(primary.get("title") or title_hint)
                     result = validate_article(article_dir, actual_title)
+                else:
+                    try:
+                        primary, article_dir = primary_download(url, title_hint, candidate_parent)
+                    except Exception as exc:
+                        primary = {"success": False, "error": f"首选下载器异常: {exc}"}
+                        article_dir.mkdir(parents=True, exist_ok=True)
+                    actual_title = str(primary.get("title") or title_hint).strip()
+                    result = validate_article(article_dir, actual_title) if primary.get("success") else None
+                    if result is None or not result.success:
+                        reason = result.reason if result else primary.get("error", "正文下载失败")
+                        logger.info("%s：首选正文不完整（%s），尝试 we-mp-rss", title_hint, reason)
+                        run_fallback(url, actual_title, article_dir, logger, tools_log_dir)
+                        fallback_title = str(
+                            read_json(article_dir / "fallback_metadata.json").get("title") or ""
+                        ).strip()
+                        if fallback_title:
+                            actual_title = fallback_title
+                        result = validate_article(article_dir, actual_title)
                 if not result.success:
+                    failed_bodies.append(title_hint)
                     logger.warning("跳过无法完整抓取的文章：%s", title_hint)
                     shutil.rmtree(candidate_parent, ignore_errors=True)
                     time.sleep(random.uniform(1.0, 2.0))
                     continue
 
                 timestamp = publication_timestamp(primary, history, article_dir)
+                if body_downloader is not None:
+                    metadata = read_json(article_dir / "metadata.json")
+                    metadata.update(title=actual_title, url=url, publish_time=timestamp, account_name=account.name)
+                    (article_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
                 account_dir.mkdir(parents=True, exist_ok=True)
                 destination = final_destination(account_dir, timestamp, actual_title, url)
                 article_dir.rename(destination)
@@ -1388,9 +1411,11 @@ def crawl_account(
                     result.text_length, result.image_count,
                 )
             except subprocess.TimeoutExpired:
+                failed_bodies.append(title_hint)
                 logger.warning("正文回退超时，跳过：%s", title_hint)
                 shutil.rmtree(candidate_parent, ignore_errors=True)
             except Exception as exc:
+                failed_bodies.append(title_hint)
                 logger.exception("文章处理失败，跳过 %s：%s", title_hint, exc)
                 shutil.rmtree(candidate_parent, ignore_errors=True)
             time.sleep(random.uniform(1.0, 2.5))
@@ -1400,6 +1425,8 @@ def crawl_account(
         "公众号 %s 完成：候选 %d 篇，本次成功新增 %d 篇",
         account.name, len(candidates), successes,
     )
+    if body_downloader is not None and failed_bodies:
+        raise RuntimeError(f"{len(failed_bodies)} 篇文章所有正文下载路径均失败，详情见工具日志")
     return successes
 
 
@@ -1533,6 +1560,14 @@ def execute(
     ARTICLES_ROOT.mkdir(parents=True, exist_ok=True)
     RECORD_ROOT.mkdir(parents=True, exist_ok=True)
     work_root.mkdir(parents=True, exist_ok=False)
+
+    if config.history_backend == "tikhub":
+        from .tikhub_pipeline import execute_tikhub
+        try:
+            execute_tikhub(config, seed_urls, report, work_root, logger, tools_log_dir)
+        finally:
+            shutil.rmtree(work_root, ignore_errors=True)
+        return RESULTS_ROOT
 
     api = LocalAPI()
     service = ManagedService(
@@ -1748,6 +1783,13 @@ def preflight(config: CrawlConfig) -> list[str]:
             WECHRSS_PROJECT / "wechat_mp_fetcher.py",
         ) if not path.exists()
     ]
+    if config.history_backend == "tikhub":
+        missing = [p for p in missing if WECHRSS_PROJECT not in p.parents]
+        try:
+            from src.integrations.tikhub import TikHubClient
+        except ModuleNotFoundError:
+            from integrations.tikhub import TikHubClient
+        TikHubClient(max_requests=config.tikhub_max_requests)
     if missing:
         raise RuntimeError("缺少运行依赖: " + ", ".join(str(path) for path in missing))
     ensure_auth_layout(ROOT, MP_PROJECT, RSS_PROJECT)
@@ -1794,6 +1836,7 @@ def main() -> None:
                 {
                     "status": "ok",
                     "command": "check",
+                    "crawl_backend": config.history_backend,
                     "input_csv": str(config.input_csv),
                     "seed_url_count": len(seed_urls),
                     "registered_account_count": registered_count,

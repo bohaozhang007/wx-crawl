@@ -154,3 +154,150 @@ Inspect stored totals and domain counts:
 For a normal run, report the import result, selected article count, cleanup
 scope, and any skipped directories. If import fails, stop and leave source
 directories untouched.
+
+## Current label enforcement
+
+Ingest requires a source label matching the current schema and decision-tree
+version, decision KEEP, and matching application_type/domains/summary/deadline/
+importance. Old report files cannot bypass this gate. Existing rows are historical
+state, not proof of current rule validity. Keep them for audit pending relabeling
+and database reconciliation; do not declare a global version migration complete
+based solely on local/remote row counts. This gate does not rewrite existing rows.
+
+
+## Latest labeling contract (2026-09-08)
+
+Read authoritative versions from `src.labeling.schema.current_contract()` on each run.
+Currently label schema is 2, decision tree is 1.2, research profile is 1.3; these
+are independent versions. Every label must include `profile_version` as well as
+`schema_version` and `tree_version`. Missing or old versions require actual
+relabeling; never stamp a new version onto an old decision.
+
+Reports carry `label_schema_version`, `tree_version`, and `profile_version`, even
+when empty. Import rejects old reports and revalidates the source KEEP label;
+SQLite stores that full validated label as provenance. Sync and deadline reminders
+verify current decisions before any outbound action. Count equality alone does
+not certify rule-version consistency. Old or unavailable source decisions require
+relabeling/reconciliation, not silent acceptance or deletion.
+
+Completion and backfill coverage are reusable only when their `label_contract`
+equals the current contract. Old unversioned markers do not certify completion.
+Use `pipeline_state.py list-pending --json` for pending discovery; do not independently
+skip a batch merely because its status says completed or its ID appears in coverage.
+For pruned archives, recover source articles before reclassification; report the
+migration as blocked until evidence is restored. Do not repeatedly retry missing
+source data or declare a global migration complete based on a new batch.
+
+
+## Latest labeling contract (2026-09-08)
+
+Read authoritative versions from `src.labeling.schema.current_contract()` on each run.
+Currently label schema is 2, decision tree is 1.2, research profile is 1.3; these
+are independent versions. Every label must include `profile_version` as well as
+`schema_version` and `tree_version`. Missing or old versions require actual
+relabeling; never stamp a new version onto an old decision.
+
+Reports carry `label_schema_version`, `tree_version`, and `profile_version`, even
+when empty. Import rejects old reports and revalidates the source KEEP label;
+SQLite stores that full validated label as provenance. Sync and deadline reminders
+verify current decisions before any outbound action. Count equality alone does
+not certify rule-version consistency. Old or unavailable source decisions require
+relabeling/reconciliation, not silent acceptance or deletion.
+
+Completion and backfill coverage are reusable only when their `label_contract`
+equals the current contract. Old unversioned markers do not certify completion.
+Use `pipeline_state.py list-pending --json` for pending discovery; do not independently
+skip a batch merely because its status says completed or its ID appears in coverage.
+For pruned archives, recover source articles before reclassification; report the
+migration as blocked until evidence is restored. Do not repeatedly retry missing
+source data or declare a global migration complete based on a new batch.
+
+
+## Deadline eligibility gate (2026-09-08)
+
+Before selecting an opportunity or sending a high-importance alert, evaluate its
+structured deadline against the current clock using src.labeling.eligibility.deadline_expired.
+A confirmed positive timestamp at or before now excludes the article, regardless
+of KEEP/high or project significance. Future, missing and ambiguous deadlines
+pass this gate and still require the normal decision/importance checks. Do not
+infer expiration from an ambiguous date or the model's cached urgency factor.
+The selector records selection=expired; alerts report skipped_expired. Import
+rechecks expiration to reject reports that became stale after selection. Retain
+source labels and archives; do not rewrite the model decision merely due to time.
+This is a dynamic downstream filter, not a new label schema/tree/profile version.
+
+
+## Deadline eligibility gate (2026-09-08)
+
+Before selecting an opportunity or sending a high-importance alert, evaluate its
+structured deadline against the current clock using src.labeling.eligibility.deadline_expired.
+A confirmed positive timestamp at or before now excludes the article, regardless
+of KEEP/high or project significance. Future, missing and ambiguous deadlines
+pass this gate and still require the normal decision/importance checks. Do not
+infer expiration from an ambiguous date or the model's cached urgency factor.
+The selector records selection=expired; alerts report skipped_expired. Import
+rechecks expiration to reject reports that became stale after selection. Retain
+source labels and archives; do not rewrite the model decision merely due to time.
+This is a dynamic downstream filter, not a new label schema/tree/profile version.
+
+
+## Geographic scope gate (2026-09-16)
+
+Current authoritative contract: schema=2, tree=1.2, profile=1.3. Read current_contract()
+instead of pinning these example versions. geography is required, with status
+eligible/out_of_scope/unclear, regions (national/beijing/zhejiang/other/unknown),
+and verbatim evidence. KEEP must pass G1 and have eligible geography with evidence.
+The tree/profile upgrade invalidates historical labels without geographic review;
+never stamp new versions or infer national scope from a national sponsor alone.
+
+Only nationwide national programs and Beijing/Zhejiang local programs (including
+subordinate cities/districts) are eligible. Other regional special programs, including
+NSFC regional innovation joint fund (Jiangxi), are excluded even if national bodies
+sponsor them or applicants nationwide may participate. Publisher location, event
+venue, collaborator addresses and incidental region mentions are not project scope.
+Mixed guides require a clearly independent eligible track with source evidence.
+Unclear geographic scope means REVIEW, no selection/import/high alert/deadline alert.
+Unknown deadlines still pass the separate deadline gate; do not confuse the two.
+
+Selection reports include geography, and import compares it to the validated source.
+Reminder scheduling and dispatch exclude other/unclassified geography, cancel pending
+reminders, and report skipped_geography. Verified relabeling and reimport can restore
+reminders cancelled solely for missing geography. No direct Agent reminder sends may
+bypass these program checks. Existing historical DB/table records are not silently
+removed; reconcile them against new labels before syncing. Do not claim old records
+or completion/coverage markers meet the new contract. Preserve migration progress.
+
+The manual label writer now requires --geography with a JSON object, for example
+'{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
+Evidence must be from the actual article, not copied from this example.
+
+
+## Geographic scope gate (2026-09-16)
+
+Current authoritative contract: schema=2, tree=1.2, profile=1.3. Read current_contract()
+instead of pinning these example versions. geography is required, with status
+eligible/out_of_scope/unclear, regions (national/beijing/zhejiang/other/unknown),
+and verbatim evidence. KEEP must pass G1 and have eligible geography with evidence.
+The tree/profile upgrade invalidates historical labels without geographic review;
+never stamp new versions or infer national scope from a national sponsor alone.
+
+Only nationwide national programs and Beijing/Zhejiang local programs (including
+subordinate cities/districts) are eligible. Other regional special programs, including
+NSFC regional innovation joint fund (Jiangxi), are excluded even if national bodies
+sponsor them or applicants nationwide may participate. Publisher location, event
+venue, collaborator addresses and incidental region mentions are not project scope.
+Mixed guides require a clearly independent eligible track with source evidence.
+Unclear geographic scope means REVIEW, no selection/import/high alert/deadline alert.
+Unknown deadlines still pass the separate deadline gate; do not confuse the two.
+
+Selection reports include geography, and import compares it to the validated source.
+Reminder scheduling and dispatch exclude other/unclassified geography, cancel pending
+reminders, and report skipped_geography. Verified relabeling and reimport can restore
+reminders cancelled solely for missing geography. No direct Agent reminder sends may
+bypass these program checks. Existing historical DB/table records are not silently
+removed; reconcile them against new labels before syncing. Do not claim old records
+or completion/coverage markers meet the new contract. Preserve migration progress.
+
+The manual label writer now requires --geography with a JSON object, for example
+'{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
+Evidence must be from the actual article, not copied from this example.

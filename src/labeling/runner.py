@@ -256,6 +256,10 @@ def validate_model_label(payload: dict[str, Any], article: ArticleInput) -> list
         payload, require_summary=True, require_deadline=True, require_importance=True
     )
     source = _normalize_evidence(article.evidence_text)
+    geography = payload.get("geography")
+    if isinstance(geography, dict) and geography.get("evidence"):
+        if _normalize_evidence(geography["evidence"]) not in source:
+            errors.append("geography.evidence is not present verbatim in the article")
     deadline = payload.get("deadline")
     if isinstance(deadline, dict) and deadline.get("status") in {"confirmed", "ambiguous"}:
         raw_text = deadline.get("raw_text")

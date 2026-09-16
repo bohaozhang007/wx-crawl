@@ -2,7 +2,7 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 SCRIPT = Path(__file__).with_name("sync_articles.py")
 spec = importlib.util.spec_from_file_location("sync_articles", SCRIPT)
@@ -41,13 +41,14 @@ class SyncTest(unittest.TestCase):
             "deadline_at": "2025-10-21 06:40:00",
             "deadline_text": "截止至2025年10月21日",
             "attachments": "https://example.com/a.pdf",
+            "importance_level": "", "importance_reason": "", "importance_factors": "{}",
         })
 
     def test_incremental_sync_inserts_missing_and_updates_changed_rows(self):
         api = Mock()
         api.list_records.return_value = [
             {"id": "remote-1", "fields": {"id": "1", "title": "旧标题"}},
-            {"id": "remote-2", "fields": {"id": "2", "url": "u2", "title": "相同", "account_name": "a", "publish_time": "2", "application_type": "科研项目申请", "domains": "", "summary": "", "content_text": "", "deadline_at": "", "deadline_text": "", "attachments": ""}},
+            {"id": "remote-2", "fields": {"id": "2", "url": "u2", "title": "相同", "account_name": "a", "publish_time": "2", "application_type": "科研项目申请", "domains": "", "summary": "", "content_text": "", "deadline_at": "", "deadline_text": "", "attachments": "", "importance_level": "", "importance_reason": "", "importance_factors": "{}"}},
         ]
         rows = [
             {"id": 1, "title": "新标题", "url": "u1", "account_name": "a", "publish_time": 1,
@@ -61,6 +62,12 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(result, {"inserted": 1, "updated": 1, "unchanged": 1})
         api.update_records.assert_called_once()
         api.insert_records.assert_called_once()
+
+    def test_invalid_version_blocks_before_any_remote_operation(self):
+        with patch.object(module, "load_rows", side_effect=RuntimeError("old tree")), patch.object(module, "NotableAPI") as api, patch("sys.argv", ["sync_articles.py"]):
+            with self.assertRaisesRegex(RuntimeError, "old tree"):
+                module.main()
+            api.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from src.labeling.config import load_labeling_config
 from src.labeling.runner import ArticleInput, discover_run_article_dirs, enforce_domain_exclusions, run_labeling
+from src.labeling.schema import load_profile_version
 from src.labeling.schema import load_tree_spec, read_label
 
 
@@ -16,10 +17,13 @@ def keep_payload() -> dict:
     return {
         "schema_version": 2,
         "tree_version": load_tree_spec()["version"],
+        "profile_version": load_profile_version(),
+        "geography": {"status":"eligible","regions":["national"],"evidence":"研发多模态大模型训练方法"},
         "decision": "KEEP",
         "decision_path": [
             "E1:PASS",
             "O1:PASS",
+            "G1:PASS",
             "O2:PASS",
             "R1:PASS",
             "A1:PASS",

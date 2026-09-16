@@ -20,7 +20,9 @@ REPO_ROOT = Path("/root/workspace/wx-crawl")
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.labeling.schema import read_label  # noqa: E402
+from src.labeling.eligibility import deadline_expired, geography_eligible
+from src.labeling.schema import load_profile_version
+from src.labeling.schema import read_label, load_tree_spec, SCHEMA_VERSION  # noqa: E402
 
 ARTICLES_ROOT = REPO_ROOT / "results" / "articles"
 RECORD_ROOT = REPO_ROOT / "results" / "record"
@@ -239,12 +241,27 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
             "reason": label["reason"] if label else reason,
             "summary": label.get("summary") if label else None,
             "importance": label.get("importance") if label else None,
+            "geography": label.get("geography") if label else None,
             "evidence": list(label["evidence"]) if label else None,
         }
         if reason:
             entry["selection"] = "pending"
             skipped.append({"title": candidate["title"], "reason": reason})
             LOGGER.warning("筛选文章 [%d/%d] 跳过 title=%s reason=%s", index, len(candidates), candidate["title"], reason)
+            ledger.append(entry)
+            continue
+        if deadline_expired(label):
+            entry["selection"] = "expired"
+            entry["selection_reason"] = "申报截止时间已过"
+            entry["deadline"] = label.get("deadline")
+            skipped.append({"title": candidate["title"], "reason": entry["selection_reason"]})
+            ledger.append(entry)
+            continue
+        if not geography_eligible(label) and (label["decision"] == "KEEP" or label.get("reason_code") in {"G1-D1", "G1-R1"}):
+            entry["selection"] = "review" if (label.get("geography") or {}).get("status") == "unclear" else "out_of_scope"
+            entry["selection_reason"] = "项目地域未确认属于国家级、北京或浙江"
+            entry["geography"] = label.get("geography")
+            skipped.append({"title": candidate["title"], "reason": entry["selection_reason"]})
             ledger.append(entry)
             continue
         if not is_wechat_article_url(candidate["url"]):
@@ -283,6 +300,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
                 "reason_code": label["reason_code"],
                 "reason": label["reason"],
                 "summary": label.get("summary", ""),
+                "geography": label.get("geography"),
                 "deadline": label.get("deadline"),
                 "importance": label.get("importance"),
                 "evidence": label["evidence"],
@@ -320,7 +338,7 @@ def select_matches(run_dir: Path) -> dict[str, Any]:
         len(matches),
         len(skipped),
     )
-    return {"run_dir": str(run_dir), "count": len(matches), "articles": matches, "skipped": skipped}
+    return {"run_dir": str(run_dir), "count": len(matches), "articles": matches, "skipped": skipped, "pending_count": sum(e.get("selection") == "pending" for e in ledger)}
 
 
 def write_ledger(run_dir: Path, ledger: list[dict[str, Any]], candidates: int, selected: int) -> None:
@@ -335,6 +353,9 @@ def write_ledger(run_dir: Path, ledger: list[dict[str, Any]], candidates: int, s
     payload = {
         "schema_version": 2,
         "run_id": run_dir.name,
+        "label_schema_version": SCHEMA_VERSION,
+        "tree_version": load_tree_spec()["version"],
+        "profile_version": load_profile_version(),
         "generated_at": datetime.now(LOCAL_TIMEZONE).isoformat(timespec="seconds"),
         "stage": "matches",
         "candidates": candidates,
@@ -370,6 +391,8 @@ def load_summaries(path: Path) -> dict[str, str]:
 def write_report(run_dir: Path, summaries_path: Path | None, output_path: Path) -> None:
     LOGGER.info("开始生成筛选报告 run_dir=%s summaries=%s output=%s", run_dir, summaries_path, output_path)
     selected = select_matches(run_dir)
+    if selected["pending_count"]:
+        raise SystemExit(f"cannot write completed report: {selected['pending_count']} articles have missing/invalid/current-version-incompatible labels")
     default_summaries_path = run_dir / "article_summaries.json"
     fallback_path = summaries_path or (default_summaries_path if default_summaries_path.is_file() else None)
     summaries = load_summaries(fallback_path) if fallback_path is not None else {}
@@ -402,6 +425,9 @@ def write_report(run_dir: Path, summaries_path: Path | None, output_path: Path) 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "run_id": run_dir.name,
+        "label_schema_version": SCHEMA_VERSION,
+        "tree_version": load_tree_spec()["version"],
+        "profile_version": load_profile_version(),
         "count": len(articles),
         "articles": articles,
         "skipped": selected["skipped"],

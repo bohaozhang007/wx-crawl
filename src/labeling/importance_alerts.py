@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from src.auth.dingtalk_notify import send_high_importance_alert
+from .eligibility import deadline_expired, geography_eligible
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,7 @@ def _fingerprint(label: dict[str, Any], url: str) -> str:
         {
             "url": url,
             "tree_version": label.get("tree_version"),
+            "profile_version": label.get("profile_version"),
             "level": importance.get("level"),
             "reason": importance.get("reason"),
         },
@@ -69,15 +71,26 @@ def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
 def notify_high_importance(article_dirs: list[Path]) -> dict[str, Any]:
     cfg = _config()
     if not bool(cfg.get("enabled", True)):
-        return {"high": 0, "sent": 0, "skipped_sent": 0, "failed": 0, "errors": []}
+        return {"high": 0, "sent": 0, "skipped_sent": 0, "skipped_expired": 0, "skipped_geography": 0, "failed": 0, "errors": []}
     ids = [str(value).strip() for value in cfg.get("mention_user_ids", []) if str(value).strip()]
     if not ids:
         raise ValueError("importance_alert.mention_user_ids must contain at least one DingTalk userId")
 
-    result: dict[str, Any] = {"high": 0, "sent": 0, "skipped_sent": 0, "failed": 0, "errors": []}
+    result: dict[str, Any] = {"high": 0, "sent": 0, "skipped_sent": 0, "skipped_expired": 0, "skipped_geography": 0, "failed": 0, "errors": []}
     for article_dir in article_dirs:
         label = _read_json(article_dir / "label.json")
+        if deadline_expired(label):
+            result["skipped_expired"] += 1
+            continue
+        if not geography_eligible(label):
+            result["skipped_geography"] += 1
+            continue
         if label.get("decision") != "KEEP" or (label.get("importance") or {}).get("level") != "high":
+            continue
+        from .schema import validate_payload
+        if validate_payload(label, require_summary=True, require_deadline=True, require_importance=True):
+            result["failed"] += 1
+            result["errors"].append({"article_dir": str(article_dir), "error": "current-version valid label required before alert"})
             continue
         result["high"] += 1
         metadata = _read_json(article_dir / "metadata.json")

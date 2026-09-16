@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from src.labeling.schema import read_label
+from src.labeling.eligibility import deadline_expired, geography_eligible
+from src.labeling.schema import read_label, current_contract
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -122,6 +123,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH) -> None:
         connection.executescript(SCHEMA)
         columns = {row[1] for row in connection.execute("PRAGMA table_info(articles)")}
         for name, definition in {
+            "label_json": "TEXT NOT NULL DEFAULT '{}'",
             "deadline_status": "TEXT NOT NULL DEFAULT 'missing'",
             "deadline_text": "TEXT NOT NULL DEFAULT ''",
             "deadline_at": "INTEGER",
@@ -231,6 +233,18 @@ def validate_article(item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         raise StorageError("each report article must be a JSON object")
     article_dir = article_dir_path(item.get("article_dir"))
+    label, errors = read_label(article_dir / "label.json")
+    if errors or label is None:
+        raise StorageError("source label must match the current schema/tree: " + "; ".join(errors))
+    if not geography_eligible(label):
+        raise StorageError("project geography must be national, Beijing or Zhejiang")
+    if deadline_expired(label):
+        raise StorageError("application deadline has passed; regenerate the selection report")
+    if label.get("decision") != "KEEP":
+        raise StorageError("only current-version KEEP labels may be imported")
+    for field in ("application_type", "domains", "summary", "deadline", "importance", "geography"):
+        if field not in label or item.get(field) != label[field]:
+            raise StorageError(f"report {field} differs from current source label")
     metadata_value = metadata(article_dir)
     title = str(item.get("title") or metadata_value.get("title") or "").strip()
     url = str(item.get("url") or metadata_value.get("url") or "").strip()
@@ -278,6 +292,7 @@ def validate_article(item: Any) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise StorageError(f"invalid publish_time for {url}: {publish_time}") from exc
     return {
+        "label": label,
         "article_dir": article_dir,
         "title": title,
         "url": url,
@@ -302,6 +317,9 @@ def validate_article(item: Any) -> dict[str, Any]:
 def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     report_path = Path(report_path).resolve()
     LOGGER.info("开始导入筛选报告 report=%s db=%s", report_path, Path(db_path).resolve())
+    report = read_json(report_path)
+    if not isinstance(report, dict) or any(report.get(key) != value for key, value in current_contract().items()):
+        raise StorageError("report must use the current labeling contract, including empty reports")
     run_id, raw_articles = report_articles(report_path)
     if not run_id.strip():
         raise StorageError("report run_id is empty")
@@ -384,6 +402,7 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
             article_id = connection.execute(
                 "SELECT id FROM articles WHERE url = ?", (article["url"],)
             ).fetchone()[0]
+            connection.execute("UPDATE articles SET label_json=? WHERE id=?", (json.dumps(article["label"], ensure_ascii=False), article_id))
             connection.execute("DELETE FROM article_domains WHERE article_id = ?", (article_id,))
             connection.executemany(
                 "INSERT INTO article_domains(article_id, domain) VALUES (?, ?)",
@@ -454,6 +473,7 @@ def query_articles(
     for row in rows:
         item = dict(row)
         try:
+            item["label"] = json.loads(item.pop("label_json", "{}"))
             item["domains"] = json.loads(item.pop("domains_json"))
             item["attachments"] = json.loads(item.pop("attachments_json"))
             item["importance_factors"] = json.loads(item.pop("importance_factors_json"))

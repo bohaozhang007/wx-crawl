@@ -1,4 +1,4 @@
-profile_version: "1.2"
+profile_version: "1.3"
 
 matching_policy:
   require_task_scope: true
@@ -64,3 +64,11 @@ domains:
     supporting_terms: [末端执行器, 抓取, 操作臂, 运动学]
     insufficient_terms: [手臂, 抓取, 执行器, 运动学]
     exclusions: [人体手臂, 非机器人语境的机械结构]
+
+geography_policy:
+  allowed: [national, beijing, zhejiang]
+  include_subordinate_cities_and_districts: true
+  other_region_special_programs: exclude_even_if_nationally_sponsored
+  unknown: review
+  evidence_required: true
+  applies_to: [科研项目申请, 科研指南申请]

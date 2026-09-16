@@ -11,6 +11,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from src.labeling.runner import run_labeling
+from src.labeling.schema import load_profile_version
 from src.labeling.schema import load_tree_spec
 
 
@@ -31,10 +32,13 @@ class FakeKeepModel:
         return {
             "schema_version": 2,
             "tree_version": load_tree_spec()["version"],
+        "profile_version": load_profile_version(),
+        "geography": {"status":"eligible","regions":["national"],"evidence":"研发多模态大模型训练方法"},
             "decision": "KEEP",
             "decision_path": [
                 "E1:PASS",
                 "O1:PASS",
+            "G1:PASS",
                 "O2:PASS",
                 "R1:PASS",
                 "A1:PASS",
@@ -112,9 +116,10 @@ class PythonLabelFilterIntegrationTest(unittest.IsolatedAsyncioTestCase):
             with patch.object(selector, "ARTICLES_ROOT", articles_root), patch.object(
                 selector, "RECORD_ROOT", record_root
             ):
-                selected = selector.select_matches(run_dir)
-                report_path = run_dir / "filtered_articles.json"
-                selector.write_report(run_dir, None, report_path)
+                with patch("src.labeling.eligibility.time.time", return_value=1787000000):
+                    selected = selector.select_matches(run_dir)
+                    report_path = run_dir / "filtered_articles.json"
+                    selector.write_report(run_dir, None, report_path)
 
             self.assertEqual(selected["count"], 1)
             self.assertEqual(selected["articles"][0]["reason_code"], "K1")

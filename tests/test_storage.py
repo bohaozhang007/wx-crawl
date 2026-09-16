@@ -60,6 +60,16 @@ class StorageTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        from tests.test_labeling_v2 import label_payload
+        label = label_payload("KEEP", "K1", ["E1:PASS", "O1:PASS", "O2:PASS", "R1:PASS", "A1:PASS", "T1:PASS", "D1:PASS", "K1"], "科研项目申请", ["具身智能", "机器人"])
+        report = json.loads(self.report.read_text())
+        report.update(db.current_contract())
+        item = report["articles"][0]
+        label.update(summary=item["summary"], importance=item["importance"])
+        item["deadline"] = label["deadline"]
+        item["geography"] = label["geography"]
+        (self.article / "label.json").write_text(json.dumps(label, ensure_ascii=False))
+        self.report.write_text(json.dumps(report, ensure_ascii=False))
         self.database = Path(self.temp_dir.name) / "articles.sqlite3"
         self.original_root = db.ARTICLES_ROOT
         db.ARTICLES_ROOT = self.root

@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.labeling.schema import load_profile_version
 from src.labeling.schema import (  # noqa: E402
     APPLICATION_TYPES,
     DECISIONS,
@@ -118,6 +119,7 @@ def write_label(
     application_type: str,
     domains: list[str],
     replace: bool,
+    geography: dict[str, Any] | None = None,
 ) -> Path:
     label_path = article_dir / "label.json"
     if label_path.exists() and not replace:
@@ -133,6 +135,8 @@ def write_label(
     payload = {
         "schema_version": SCHEMA_VERSION,
         "tree_version": tree_spec["version"],
+        "profile_version": load_profile_version(),
+        "geography": geography,
         "decision": decision,
         "decision_path": decision_path,
         "reason_code": reason_code,
@@ -145,6 +149,11 @@ def write_label(
         "application_type": application_type,
         "domains": [domain for domain in DOMAINS if domain in selected],
     }
+    if isinstance(geography, dict) and geography.get("evidence"):
+        source = "\n".join(path.read_text(encoding="utf-8") for path in
+                           (article_dir / "content.txt", article_dir / "metadata.json", article_dir / "data.json") if path.is_file())
+        if geography["evidence"] not in source:
+            raise LabelError("geography.evidence must be verbatim source text")
     errors = validate_payload(payload, require_summary=True)
     if errors:
         raise LabelError("; ".join(errors))
@@ -215,6 +224,7 @@ def command_write(args: argparse.Namespace) -> None:
         args.application_type,
         args.domain,
         args.replace,
+        json.loads(args.geography),
     )
     print(path)
 
@@ -394,6 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     write_parser.add_argument("--application-type", required=True, choices=APPLICATION_TYPES)
     write_parser.add_argument("--domain", action="append", default=[], choices=DOMAINS)
+    write_parser.add_argument("--geography", required=True, help='JSON with status, regions, evidence; national/Beijing/Zhejiang only')
     write_parser.add_argument("--replace", action="store_true")
     write_parser.set_defaults(func=command_write)
 

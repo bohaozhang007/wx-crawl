@@ -41,7 +41,7 @@ class LabelingModelCompatibilityTest(unittest.IsolatedAsyncioTestCase):
             max_retries=1,
         )
         with patch("src.labeling.model.AsyncOpenAI", return_value=client):
-            model = OpenAILabelModel(config)
+            model = OpenAILabelModel(config, max_output_tokens=16384)
         payload, usage = await model.label("system", "article")
         self.assertEqual(payload, {"schema_version": 2})
         self.assertEqual(usage, {})
@@ -52,6 +52,7 @@ class LabelingModelCompatibilityTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"summary"', client.completions.kwargs["messages"][0]["content"])
         self.assertIn('"deadline"', client.completions.kwargs["messages"][0]["content"])
         self.assertEqual(client.completions.kwargs["model"], "deepseek-v4-flash")
+        self.assertEqual(client.completions.kwargs["max_tokens"], 16384)
 
 
 if __name__ == "__main__":

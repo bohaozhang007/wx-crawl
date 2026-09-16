@@ -5,6 +5,8 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from tests.test_labeling_runner import keep_payload
 
 from src.crawler.attachments import discover_attachments
 from src.reminders.cli import reconcile_records
@@ -43,11 +45,18 @@ class ReminderTest(unittest.TestCase):
                        VALUES('https://mp.weixin.qq.com/s/x','项目',0,'科研项目申请','confirmed',?,'run',?,?)""",
                     (now + 10 * 86400, now, now),
                 )
+            def update_label(deadline):
+                label = keep_payload()
+                label['deadline'] = {'status': 'confirmed', 'raw_text': '申报截止', 'timestamp': deadline, 'timezone': 'Asia/Shanghai'}
+                with sqlite3.connect(database) as connection:
+                    connection.execute("UPDATE articles SET label_json=?, domains_json=?, summary=?, deadline_text=?, importance_level=?, importance_reason=?, importance_factors_json=?", (json.dumps(label), json.dumps(label['domains']), label['summary'], '申报截止', label['importance']['level'], label['importance']['reason'], json.dumps(label['importance']['factors'])))
+            update_label(now + 10 * 86400)
             result = reconcile_records(database, now=now, config={"enabled": True, "days_before": 7, "max_attempts": 3})
             self.assertEqual(result["created"], 1)
             self.assertEqual(result["next_remind_at"], now + 3 * 86400)
             with sqlite3.connect(database) as connection:
                 connection.execute("UPDATE articles SET deadline_at=?", (now + 20 * 86400,))
+            update_label(now + 20 * 86400)
             reconcile_records(database, now=now, config={"enabled": True, "days_before": 7, "max_attempts": 3})
             with sqlite3.connect(database) as connection:
                 statuses = [row[0] for row in connection.execute("SELECT status FROM deadline_reminders ORDER BY id")]

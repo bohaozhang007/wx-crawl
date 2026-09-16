@@ -267,3 +267,96 @@ Labeling, database import, and table sync failures remain terminal for that
 stage and must be reported without claiming success. Include the `vision`
 toolset because the crawler may need to deliver and verify a login QR code. A
 single job also prevents table sync from racing an unfinished database import.
+
+## TikHub sample scope
+
+The opt-in `src.crawler.tikhub_sample` command also runs labeling, selection and
+SQLite import for its exact sample. Its nested `results/record/samples/<timestamp>`
+records are excluded from automatic pending-batch scanning; do not promote them
+into scheduled DingTalk sync or cleanup without a request. `sample_result.json`
+records completion and import counts. Normal label rules still apply, including
+retaining image-only articles for REVIEW when decisive text is missing.
+
+Resume a fully archived sample with `.venv/bin/python -m src.crawler.tikhub_sample
+--resume results/record/samples/<timestamp>`. This bypasses notification delivery,
+reuses valid labels, and retries selection/import through the normal validators.
+
+## Strict version gate
+
+The current contract is schema_version=2 plus the tree_version declared by the
+repository decision tree (currently 1.1). A matches preview may list PENDING items,
+but write-report refuses completion while any run article has a missing, invalid,
+or outdated label or cannot be matched. A valid all-DROP/REVIEW run still produces
+a zero-selection report. Reports and ledgers now record the expected label schema
+and tree version; these are separate from the report/ledger's own schema version.
+Database ingest revalidates the source label and requires current KEEP with report
+fields equal to that label. Do not use an old saved report to bypass relabeling.
+
+
+## Latest labeling contract (2026-09-08)
+
+Read authoritative versions from `src.labeling.schema.current_contract()` on each run.
+Currently label schema is 2, decision tree is 1.2, research profile is 1.3; these
+are independent versions. Every label must include `profile_version` as well as
+`schema_version` and `tree_version`. Missing or old versions require actual
+relabeling; never stamp a new version onto an old decision.
+
+Reports carry `label_schema_version`, `tree_version`, and `profile_version`, even
+when empty. Import rejects old reports and revalidates the source KEEP label;
+SQLite stores that full validated label as provenance. Sync and deadline reminders
+verify current decisions before any outbound action. Count equality alone does
+not certify rule-version consistency. Old or unavailable source decisions require
+relabeling/reconciliation, not silent acceptance or deletion.
+
+Completion and backfill coverage are reusable only when their `label_contract`
+equals the current contract. Old unversioned markers do not certify completion.
+Use `pipeline_state.py list-pending --json` for pending discovery; do not independently
+skip a batch merely because its status says completed or its ID appears in coverage.
+For pruned archives, recover source articles before reclassification; report the
+migration as blocked until evidence is restored. Do not repeatedly retry missing
+source data or declare a global migration complete based on a new batch.
+
+
+## Deadline eligibility gate (2026-09-08)
+
+Before selecting an opportunity or sending a high-importance alert, evaluate its
+structured deadline against the current clock using src.labeling.eligibility.deadline_expired.
+A confirmed positive timestamp at or before now excludes the article, regardless
+of KEEP/high or project significance. Future, missing and ambiguous deadlines
+pass this gate and still require the normal decision/importance checks. Do not
+infer expiration from an ambiguous date or the model's cached urgency factor.
+The selector records selection=expired; alerts report skipped_expired. Import
+rechecks expiration to reject reports that became stale after selection. Retain
+source labels and archives; do not rewrite the model decision merely due to time.
+This is a dynamic downstream filter, not a new label schema/tree/profile version.
+
+
+## Geographic scope gate (2026-09-16)
+
+Current authoritative contract: schema=2, tree=1.2, profile=1.3. Read current_contract()
+instead of pinning these example versions. geography is required, with status
+eligible/out_of_scope/unclear, regions (national/beijing/zhejiang/other/unknown),
+and verbatim evidence. KEEP must pass G1 and have eligible geography with evidence.
+The tree/profile upgrade invalidates historical labels without geographic review;
+never stamp new versions or infer national scope from a national sponsor alone.
+
+Only nationwide national programs and Beijing/Zhejiang local programs (including
+subordinate cities/districts) are eligible. Other regional special programs, including
+NSFC regional innovation joint fund (Jiangxi), are excluded even if national bodies
+sponsor them or applicants nationwide may participate. Publisher location, event
+venue, collaborator addresses and incidental region mentions are not project scope.
+Mixed guides require a clearly independent eligible track with source evidence.
+Unclear geographic scope means REVIEW, no selection/import/high alert/deadline alert.
+Unknown deadlines still pass the separate deadline gate; do not confuse the two.
+
+Selection reports include geography, and import compares it to the validated source.
+Reminder scheduling and dispatch exclude other/unclassified geography, cancel pending
+reminders, and report skipped_geography. Verified relabeling and reimport can restore
+reminders cancelled solely for missing geography. No direct Agent reminder sends may
+bypass these program checks. Existing historical DB/table records are not silently
+removed; reconcile them against new labels before syncing. Do not claim old records
+or completion/coverage markers meet the new contract. Preserve migration progress.
+
+The manual label writer now requires --geography with a JSON object, for example
+'{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
+Evidence must be from the actual article, not copied from this example.

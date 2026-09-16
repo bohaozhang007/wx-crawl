@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README-CN.md)
 
-`wx-crawl` builds a local archive of WeChat Official Account history and article content. It uses [wechat-mp-tools](https://github.com/x554960766/wechat-mp-tools) as the primary history and article backend. If that history backend is unavailable, it switches to [WechRss](https://github.com/johamwon/wechrss), which connects directly to WeRead and keeps refreshable credentials locally. [we-mp-rss](https://github.com/rachelos/we-mp-rss) remains the article-content fallback when the primary article result is missing or incomplete. Many thanks to these projects for making this workflow possible.
+`wx-crawl` uses TikHub WeChat MP V2 HTTP history, local wechat-mp-tools body downloads, we-mp-rss fallback, and finally paid TikHub detail if both local tools fail validation. The default workflow needs no WeRead relay or QR login.
 
 ## Contents
 
@@ -24,7 +24,7 @@ The normal workflow is:
 1. Scan the input CSV for WeChat article URLs.
 2. Resolve each URL to an account and merge newly discovered accounts into `account_sources.csv`.
 3. Revalidate every registered account ID and name.
-4. Retrieve history candidates according to the configured crawl mode, using `wechat-mp-tools` first and WechRss if the first history backend is unavailable.
+4. Retrieve history candidates according to the configured crawl mode, using TikHub V2 opaque cursor pagination.
 5. Skip article URLs that already exist locally.
 6. Download each candidate with `wechat-mp-tools`.
 7. If the primary result fails a lightweight content check, retry it with `we-mp-rss`.
@@ -265,7 +265,7 @@ multi-stage orchestration.
 
 ### Notes
 
-- On the first authenticated run, or after credentials expire, the crawler sends the QR image directly to the configured DingTalk group and also records its temporary path under the current run's `tools-log` directory. Scan it with WeChat within five minutes. If the upstream status endpoint initially accepts a stale credential but a real account or history request rejects it, the crawler detects that response, forces a fresh QR login, and retries the interrupted operation once. The QR image is removed afterward, while credentials are stored locally for reuse.
+- Only in explicitly selected `history_backend: legacy` mode: on the first authenticated run, or after credentials expire, the crawler sends the QR image directly to the configured DingTalk group and also records its temporary path under the current run's `tools-log` directory. Scan it with WeChat within five minutes. If the upstream status endpoint initially accepts a stale credential but a real account or history request rejects it, the crawler detects that response, forces a fresh QR login, and retries the interrupted operation once. The QR image is removed afterward, while credentials are stored locally for reuse.
 - One authentication is used for the history backend; a separate scan is not required for every Official Account.
 - Expired or invalid credentials may cause a later run to request a new scan.
 - Newly discovered accounts are added to `account_sources.csv`. Every registered account name is revalidated on each run; stable account IDs are retained if an identity check is inconsistent.
@@ -435,7 +435,9 @@ Consequently, a fresh clone can inherit the same account registry but has no loc
 - Run `python3 src/crawl.py --check` to see the detected-link and registered-account counts.
 - Remember that a non-empty registry continues to run even when the current input contains no new link.
 
-### The QR code does not appear or login fails
+### Legacy mode only: QR login fails
+
+The default TikHub mode must not request QR login; verify `./run.sh --check` first.
 
 - Read the exact QR path printed in the terminal and open the PNG before the five-minute timeout.
 - Confirm the login in the WeChat app after scanning.
@@ -464,3 +466,21 @@ Special thanks to the maintainers and contributors of:
 - [we-mp-rss](https://github.com/rachelos/we-mp-rss), which provides browser-based article extraction used as the fallback when the primary result is incomplete.
 
 `wx-crawl` integrates these projects without modifying their tracked source code.
+
+### Bounded TikHub pipeline trial
+
+Run `.venv/bin/python -m src.crawler.tikhub_sample --account 3 --account 4 --account 5 --per-account 2 --max-pages 2 --max-requests 12`.
+This opt-in entrypoint fetches V2 lists over HTTP, deduplicates archive/database URLs,
+tries the existing open-source body downloaders, and calls paid TikHub detail only
+when validation fails. It labels the sample and imports only validated KEEP records.
+Credentials remain in `TIKHUB_API_KEY` or ignored `src/auth/config/tikhub.env`.
+Nested reports under `results/record/samples/` are excluded from scheduled batch
+scanning. No notifications or pruning are performed. Production and scheduled crawls now use the same TikHub backend. Optional `--title-contains` filters sample titles without changing labels.
+
+### Production TikHub backend
+
+`crawl.history_backend: tikhub` now applies to `run.sh` and the existing scheduled
+scripts. No WeRead relay or QR login is used. Bodies fall back from wechat-mp-tools
+to we-mp-rss and finally paid TikHub detail, always with validation. The per-run
+`crawl.tikhub_max_requests` cap defaults to 120. Paid HTTP calls are not automatically
+retried. Diagnostics are in `tools-log/tikhub.json`. `legacy` is manual rollback only.
