@@ -214,6 +214,35 @@ those batches complete; instead confirm the knowledge base is intact (all archiv
 carry the current contract; KEEP-dir URL set == SQLite URL set).
 
 
+### Tree 1.2 geography gate: unsatisfiable KEEP path (fixed 2026-09-17)
+
+`schema.py` requires the literal step `G1:PASS` in `decision_path` for KEEP, but the
+decision tree and `prompt.py` never told the model to emit `节点:PASS` markers — the
+model emits bare nodes (`["E1","O1","G1","O2",…]`), so every eligible article failed
+with `KEEP requires passing the G1 geography gate`: zero KEEPs under tree 1.2, old
+KEEP archive rows stuck pending, DB/sync blocked. Fixed by adding execution rule 7 to
+`skill/label-wechat-articles/references/decision-tree.md` (the file the loader reads)
+requiring `节点:PASS` for passed nodes, the terminal node last, and KEEP paths to
+contain `G1:PASS` and end at `K1`. No version bump (semantics unchanged). A correct
+KEEP path is
+`["E1:PASS","O1:PASS","G1:PASS","O2:PASS","R1:PASS","A1:PASS","T1:PASS","D1:PASS","K1"]`.
+Provider content moderation (`Content Exists Risk`, DeepSeek HTTP 400) is not
+retryable on the same provider — relabel those articles with the configured fallback
+provider via `LABEL_PROVIDER/LABEL_MODEL/LABEL_BASE_URL/LABEL_API_KEY`.
+
+### DB reconcile under a new contract (geography runbook, executed 2026-09-17)
+
+After a contract bump that also changes selection rules, `require_current_selection`
+blocks sync for every DB row whose stored fields/provenance no longer match its
+source label. Reconcile with `scripts/reconcile_db_to_labels.py`: refresh each row's
+`application_type/domains/summary/deadline_*/importance_*` and `label_json` from the
+current-contract KEEP label, delete rows whose source label is now DROP/REVIEW
+(new geography rule: unclear scope = REVIEW and never imported), then
+`sync_articles.py --mode incremental` and read back with the URL/id-set diff plus
+field-level comparison. Note `wx-crawl-db ingest` refuses reports containing expired
+deadlines (`application deadline has passed; regenerate the selection report`), so
+only non-expired KEEPs can be (re)imported; expired rows are reconciled in place.
+
 ## Deadline eligibility gate (2026-09-08)
 
 Before selecting an opportunity or sending a high-importance alert, evaluate its
