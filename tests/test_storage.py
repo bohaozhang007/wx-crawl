@@ -90,6 +90,21 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(rows[0]["content_text"], "正文内容")
         self.assertEqual(rows[0]["importance_level"], "high")
 
+    def test_intake_round_trip_and_unknown_does_not_erase(self) -> None:
+        text = "项目甲由科技厅主管。"
+        (self.article / "content.txt").write_text(text)
+        label_path = self.article / "label.json"
+        label = json.loads(label_path.read_text())
+        label["project_intake"] = {"version": 1, "project_name": {"value": "项目甲", "evidence": "项目甲"}, "authority": {"value": "科技厅", "evidence": "项目甲由科技厅主管"}}
+        label_path.write_text(json.dumps(label))
+        db.import_report(self.report, self.database)
+        row = db.query_articles(self.database)[0]
+        self.assertEqual(row["project_intake"]["authority"]["value"], "科技厅")
+        label["project_intake"] = {"version": 1}
+        label_path.write_text(json.dumps(label))
+        db.import_report(self.report, self.database)
+        self.assertEqual(db.query_articles(self.database)[0]["project_intake"], row["project_intake"])
+
     def test_delivery_state(self) -> None:
         db.import_report(self.report, self.database)
         article_id = db.query_articles(self.database)[0]["id"]

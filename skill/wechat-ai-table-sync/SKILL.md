@@ -12,8 +12,7 @@ metadata:
 
 Synchronize the local SQLite `articles` table into the existing DingTalk AI
 multi-dimensional table. The workflow supports full and incremental modes and
-uses the database article `id` as the stable upsert key. It does not add or
-remove DingTalk fields and does not synchronize delivery `channel` state.
+uses the database article `id` as the stable upsert key. It adds missing managed fields but does not remove DingTalk fields and does not synchronize delivery `channel` state.
 
 ## When to Use
 
@@ -81,14 +80,14 @@ for a controlled test or another authorized table.
 ## Procedure
 
 1. Load all rows from SQLite `articles`, ordered by `id`; parse `domains_json`.
-   Completion criterion: every source row has a string value for the twelve managed fields.
+   Completion criterion: every source row has a string value for the managed fields.
 2. Obtain a DingTalk access token from the configured application credentials.
    Completion criterion: token acquisition succeeds without exposing its value.
 3. List all target records with pagination. Completion criterion: every remote
    record is considered, not only the first page.
 4. Index remote records by their `fields.id` value. Completion criterion: duplicate
    source IDs are not created.
-5. Map each database row to the fixed twelve-field schema. Convert values to
+5. Map each database row to the managed field schema. Convert values to
    strings; join domain labels with commas.
 6. In incremental mode, insert missing IDs and update only changed rows. In full
    mode, update every existing matching ID and insert missing IDs. The script does
@@ -96,7 +95,7 @@ for a controlled test or another authorized table.
 7. Send writes in bounded batches. Completion criterion: the CLI prints JSON with
    `inserted`, `updated`, and `unchanged` counts.
 8. Verify by listing the table again and checking that each source `id` maps to one
-   remote record whose twelve managed fields equal the mapped source fields.
+   remote record whose managed fields equal the mapped source fields.
 
 ## Safety and Idempotency
 
@@ -203,3 +202,36 @@ or completion/coverage markers meet the new contract. Preserve migration progres
 The manual label writer now requires --geography with a JSON object, for example
 '{"status":"eligible","regions":["beijing"],"evidence":"北京市科技计划项目"}'.
 Evidence must be from the actual article, not copied from this example.
+
+
+## Project intake fields (2026-10-09)
+
+Do not modify 项目入库表单 or its DingTalk automation. Enrich only 爬取公众号情况日志.
+The seven additional text columns are 正式项目名称、主管部门、申报金额（万元）、申报开始日期、
+申报截止日期、申报要求摘要、预期成果. Dates use YYYY-MM-DD; amounts use decimal RMB万元.
+Existing url/attachments remain the reference-link/attachment sources.
+
+New model outputs include optional project_intake (independent protocol version 1).
+Every nonempty field needs verbatim body evidence, validated by project_intake.normalize.
+Text values must be copied from that evidence; only unambiguous full dates and exact
+per-project currency conversions are normalized. Unknown fields are omitted, not
+zero or guessed text. No title fallback, no publisher-to-authority mapping, no
+inferred year, no total-budget/cap/range-to-fixed-amount conversion. An unresolved
+formal project identity means the entire extraction remains empty.
+
+Do not fill 项目类别 or 紧急程度 until their definitions are confirmed. application_type
+is not 纵向/横向; importance_level is not form urgency. Internal actor, organization,
+state and recommendation fields remain human-managed. Do not map a general article
+summary to 申报要求摘要 without explicit application conditions.
+
+SQLite stores project_intake_json separately from decision labels. Existing decision
+contracts are unchanged and need not be relabeled just to enrich these fields.
+Sync revalidates evidence against stored body text, omits blank values, and fills
+intake columns only when their remote values are empty. Even --mode full cannot
+clear unknown values or replace human-entered intake values.
+
+Optional historical enrichment (does not send alerts, change decisions or sync):
+`.venv/bin/python -m src.labeling.enrich_intake --output <audit.json>` previews;
+add `--article-id <id>` or `--limit <n>` to scope and `--apply` to persist with a
+SQLite backup. Inspect the audit, then use the existing sync entry point. Failed
+extractions remain unmodified. Do not overwrite or rebuild the target intake form.

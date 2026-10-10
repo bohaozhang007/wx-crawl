@@ -72,3 +72,23 @@ class SyncTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IntakeSyncTest(unittest.TestCase):
+    def test_full_sync_preserves_unknown_and_human_values(self):
+        api=Mock()
+        api.list_records.return_value=[{'id':'remote','fields':{'id':'1','title':'人工标题','正式项目名称':'人工填写名称','申报金额（万元）':'300'}}]
+        row={'id':1,'title':'','content_text':'项目甲由科技厅主管。','project_intake':{'version':1,'project_name':{'value':'项目甲','evidence':'项目甲'},'authority':{'value':'科技厅','evidence':'项目甲由科技厅主管'}}}
+        module.sync_rows(api,[row],mode='full')
+        sent=api.update_records.call_args.args[0][0]['fields']
+        self.assertNotIn('title',sent)
+        self.assertNotIn('正式项目名称',sent)
+        self.assertNotIn('申报金额（万元）',sent)
+        self.assertNotIn('主管部门',sent)
+
+
+    def test_confirmed_fields_fill_blank_cells(self):
+        api=Mock();api.list_records.return_value=[{'id':'remote','fields':{'id':'1','正式项目名称':'项目甲'}}]
+        row={'id':1,'content_text':'项目甲由科技厅主管。','project_intake':{'version':1,'project_name':{'value':'项目甲','evidence':'项目甲'},'authority':{'value':'科技厅','evidence':'项目甲由科技厅主管'}}}
+        module.sync_rows(api,[row])
+        sent=api.update_records.call_args.args[0][0]['fields']
+        self.assertEqual(sent['主管部门'],'科技厅')

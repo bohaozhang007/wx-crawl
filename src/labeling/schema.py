@@ -31,7 +31,7 @@ REQUIRED_KEYS = {
     "application_type",
     "domains",
 }
-EXPECTED_KEYS = REQUIRED_KEYS | {"summary", "deadline", "importance"}
+EXPECTED_KEYS = REQUIRED_KEYS | {"summary", "deadline", "importance", "project_intake"}
 
 TREE_VERSION_RE = re.compile(r"^Tree version: `([^`]+)`\s*$", re.MULTILINE)
 NODE_RE = re.compile(r"^## \[([A-Z][A-Z0-9-]*)\]\s+.+$", re.MULTILINE)

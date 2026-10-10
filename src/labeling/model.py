@@ -52,6 +52,23 @@ class GeographyOutput(BaseModel):
     evidence: str
 
 
+class EvidenceValue(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    value: str | None
+    evidence: str
+
+class ProjectIntakeOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    version: Literal[1]
+    project_name: EvidenceValue
+    authority: EvidenceValue
+    amount_wan: EvidenceValue
+    start_date: EvidenceValue
+    end_date: EvidenceValue
+    requirements: EvidenceValue
+    deliverables: EvidenceValue
+
+
 class LabelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +76,7 @@ class LabelOutput(BaseModel):
     tree_version: str
     profile_version: str
     geography: GeographyOutput
+    project_intake: ProjectIntakeOutput
     decision: Literal["KEEP", "DROP", "REVIEW"]
     decision_path: list[str]
     reason_code: str
@@ -93,6 +111,8 @@ def _usage_from_response(response) -> dict:
 
 
 class OpenAILabelModel:
+    output_model = LabelOutput
+
     def __init__(self, config: LabelingConfig, *, max_output_tokens: int | None = None) -> None:
         if max_output_tokens is None:
             max_output_tokens = config.max_output_tokens
@@ -128,14 +148,14 @@ class OpenAILabelModel:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
                 ],
-                text_format=LabelOutput,
+                text_format=self.output_model,
             )
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("model returned no parsed label (possibly a refusal)")
             return parsed.model_dump(mode="json"), _usage_from_response(response)
 
-        schema = json.dumps(LabelOutput.model_json_schema(), ensure_ascii=False)
+        schema = json.dumps(self.output_model.model_json_schema(), ensure_ascii=False)
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -164,3 +184,7 @@ class OpenAILabelModel:
         if not isinstance(payload, dict):
             raise RuntimeError("model JSON root must be an object")
         return payload, _usage_from_response(response)
+
+
+class OpenAIProjectIntakeModel(OpenAILabelModel):
+    output_model = ProjectIntakeOutput

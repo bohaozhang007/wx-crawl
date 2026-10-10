@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from src.labeling.eligibility import deadline_expired, geography_eligible
+from src.labeling.project_intake import normalize as normalize_intake
 from src.labeling.schema import read_label, current_contract
 
 
@@ -123,6 +124,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH) -> None:
         connection.executescript(SCHEMA)
         columns = {row[1] for row in connection.execute("PRAGMA table_info(articles)")}
         for name, definition in {
+            "project_intake_json": "TEXT NOT NULL DEFAULT '{}'",
             "label_json": "TEXT NOT NULL DEFAULT '{}'",
             "deadline_status": "TEXT NOT NULL DEFAULT 'missing'",
             "deadline_text": "TEXT NOT NULL DEFAULT ''",
@@ -403,6 +405,12 @@ def import_report(report_path: Path, db_path: Path = DEFAULT_DB_PATH) -> dict[st
                 "SELECT id FROM articles WHERE url = ?", (article["url"],)
             ).fetchone()[0]
             connection.execute("UPDATE articles SET label_json=? WHERE id=?", (json.dumps(article["label"], ensure_ascii=False), article_id))
+            intake = normalize_intake(article["label"].get("project_intake"), article["content_text"])
+            # Old labels or uncertain extraction must not erase verified enrichment.
+            if len(intake) > 1:
+                prior = connection.execute("SELECT project_intake_json FROM articles WHERE id=?", (article_id,)).fetchone()[0]
+                intake = {**normalize_intake(json.loads(prior), article["content_text"]), **intake}
+                connection.execute("UPDATE articles SET project_intake_json=? WHERE id=?", (json.dumps(intake, ensure_ascii=False), article_id))
             connection.execute("DELETE FROM article_domains WHERE article_id = ?", (article_id,))
             connection.executemany(
                 "INSERT INTO article_domains(article_id, domain) VALUES (?, ?)",
@@ -473,6 +481,7 @@ def query_articles(
     for row in rows:
         item = dict(row)
         try:
+            item["project_intake"] = json.loads(item.pop("project_intake_json", "{}"))
             item["label"] = json.loads(item.pop("label_json", "{}"))
             item["domains"] = json.loads(item.pop("domains_json"))
             item["attachments"] = json.loads(item.pop("attachments_json"))

@@ -11,11 +11,15 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[3]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+from src.labeling.project_intake import FIELD_NAMES, table_fields as intake_table_fields
+
 DEFAULT_DB = REPO / "results" / "articles.sqlite3"
 BASE_ID = "P0MALyR8kNpXlRO7FYXjkO4bJ3bzYmDO"
 SHEET_ID = "0md26ggk3sgnjzj22zp3e"
 OPERATOR_UNION_ID = "nH3HfDiPL40MDE9MAPN5BZQiEiE"
-TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "importance_level", "importance_reason", "importance_factors", "attachments")
+TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "importance_level", "importance_reason", "importance_factors", "attachments") + tuple(FIELD_NAMES.values())
 
 
 def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
@@ -40,19 +44,20 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
     else:
         deadline_text_value = ""
     return {
-        "id": str(row.get("id", "")),
-        "url": str(row.get("url", "")),
-        "title": str(row.get("title", "")),
-        "account_name": str(row.get("account_name", "")),
-        "publish_time": str(row.get("publish_time", "")),
-        "application_type": str(row.get("application_type", "")),
+        **intake_table_fields(row.get("project_intake") or (row.get("label") or {}).get("project_intake"), row.get("content_text") or ""),
+        "id": str(row.get("id", "") or ""),
+        "url": str(row.get("url", "") or ""),
+        "title": str(row.get("title", "") or ""),
+        "account_name": str(row.get("account_name", "") or ""),
+        "publish_time": str(row.get("publish_time", "") or ""),
+        "application_type": str(row.get("application_type", "") or ""),
         "domains": domains_text,
-        "summary": str(row.get("summary", "")),
-        "content_text": str(row.get("content_text", "")),
+        "summary": str(row.get("summary", "") or ""),
+        "content_text": str(row.get("content_text", "") or ""),
         "deadline_at": deadline_text_value,
-        "deadline_text": str(row.get("deadline_text", "")),
-        "importance_level": str(row.get("importance_level", "")),
-        "importance_reason": str(row.get("importance_reason", "")),
+        "deadline_text": str(row.get("deadline_text", "") or ""),
+        "importance_level": str(row.get("importance_level", "") or ""),
+        "importance_reason": str(row.get("importance_reason", "") or ""),
         "importance_factors": json.dumps(row.get("importance_factors") or {}, ensure_ascii=False),
         "attachments": attachment_links,
     }
@@ -140,8 +145,14 @@ def sync_rows(api: Any, rows: list[dict[str, Any]], mode: str = "incremental", b
     inserts, updates = [], []
     unchanged = 0
     for row in rows:
-        fields = to_table_fields(row)
+        fields = {key:value for key,value in to_table_fields(row).items() if value not in (None, "") and not (key == "importance_factors" and value == "{}")}
         old = by_id.get(fields["id"])
+        if old:
+            # Never mix a newly extracted project with a differently named manual entry.
+            old_name = old.get("fields", {}).get("正式项目名称")
+            identity_conflict = bool(old_name and fields.get("正式项目名称") and old_name != fields["正式项目名称"])
+            fields = {key:value for key,value in fields.items()
+                      if key not in FIELD_NAMES.values() or (not identity_conflict and old.get("fields",{}).get(key) in (None,"",value))}
         if old is None:
             inserts.append(fields)
         elif mode == "full" or {k: old.get("fields", {}).get(k, "") for k in fields} != fields:

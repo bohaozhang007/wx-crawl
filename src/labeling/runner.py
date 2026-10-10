@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .model import LabelModel
+from .project_intake import normalize as normalize_intake
 from .prompt import build_article_prompt, build_system_prompt, read_rules
 from .schema import read_label, validate_payload
 
@@ -327,6 +328,8 @@ async def label_one(
         try:
             payload, usage = await model.label(system_prompt, article_prompt, feedback)
             payload = enforce_domain_exclusions(payload, article)
+            if "project_intake" in payload:
+                payload["project_intake"] = normalize_intake(payload["project_intake"], article.content)
             if usage:
                 usage_attempts.append({"attempt": attempt + 1, **usage})
             errors = validate_model_label(payload, article)
