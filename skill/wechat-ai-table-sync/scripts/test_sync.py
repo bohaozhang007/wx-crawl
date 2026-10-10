@@ -38,7 +38,7 @@ class SyncTest(unittest.TestCase):
             "account_name": "公众号", "publish_time": "1760000000",
             "application_type": "科研项目申请", "summary": "摘要",
             "content_text": "正文", "domains": "具身智能,机器人",
-            "deadline_at": "2025-10-21 06:40:00",
+            "deadline_at": 1761000000000,
             "deadline_text": "截止至2025年10月21日",
             "attachments": "https://example.com/a.pdf",
             "importance_level": "", "importance_reason": "", "importance_factors": "{}",
@@ -92,3 +92,27 @@ class IntakeSyncTest(unittest.TestCase):
         module.sync_rows(api,[row])
         sent=api.update_records.call_args.args[0][0]['fields']
         self.assertEqual(sent['主管部门'],'科技厅')
+
+
+class DateSyncTest(unittest.TestCase):
+    def test_date_timezone_and_legacy_text(self):
+        self.assertEqual(module.date_milliseconds("2026-10-10"), 1791561600000)
+        self.assertEqual(module.to_table_fields({"deadline_at":1761000000}, {"deadline_at":"text"})["deadline_at"], "2025-10-21 06:40:00")
+        self.assertTrue(module.field_equal("deadline_at", "2025-10-21 06:40:00", 1761000000000))
+        self.assertFalse(module.field_equal("deadline_at", "未知", 1761000000000))
+        self.assertEqual(module.to_table_fields({})["deadline_at"], "")
+
+    def test_native_dates_and_json_are_idempotent(self):
+        row={"id":1,"content_text":"项目甲于2026年10月10日开始申报。", "project_intake":{"version":1,"project_name":{"value":"项目甲","evidence":"项目甲"},"start_date":{"value":"2026-10-10","evidence":"2026年10月10日开始申报"}},"importance_factors":{"z":1,"a":2}}
+        fields=module.to_table_fields(row)
+        self.assertEqual(fields["申报开始日期"],1791561600000)
+        fields["importance_factors"]='{"a":2,"z":1}'
+        api=Mock();api.list_records.return_value=[{"id":"remote","fields":fields}]
+        self.assertEqual(module.sync_rows(api,[row]),{"inserted":0,"updated":0,"unchanged":1})
+        api.update_records.assert_not_called()
+
+    def test_manual_date_is_preserved(self):
+        api=Mock();api.list_records.return_value=[{"id":"remote","fields":{"id":"1","申报开始日期":1791648000000}}]
+        row={"id":1,"content_text":"项目甲于2026年10月10日开始申报。", "project_intake":{"version":1,"project_name":{"value":"项目甲","evidence":"项目甲"},"start_date":{"value":"2026-10-10","evidence":"2026年10月10日开始申报"}}}
+        module.sync_rows(api,[row],mode="full")
+        self.assertNotIn("申报开始日期",api.update_records.call_args.args[0][0]["fields"])

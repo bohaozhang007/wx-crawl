@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +22,33 @@ BASE_ID = "P0MALyR8kNpXlRO7FYXjkO4bJ3bzYmDO"
 SHEET_ID = "0md26ggk3sgnjzj22zp3e"
 OPERATOR_UNION_ID = "nH3HfDiPL40MDE9MAPN5BZQiEiE"
 TABLE_FIELDS = ("id", "content_text", "publish_time", "account_name", "application_type", "summary", "url", "domains", "title", "deadline_at", "deadline_text", "importance_level", "importance_reason", "importance_factors", "attachments") + tuple(FIELD_NAMES.values())
+DATE_FIELDS = {"deadline_at": "YYYY-MM-DD HH:mm:ss", "申报开始日期": "YYYY-MM-DD", "申报截止日期": "YYYY-MM-DD"}
 
 
-def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
+def date_milliseconds(value: Any) -> int:
+    """Notable date values are Unix milliseconds; naive dates mean Shanghai time."""
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        return int(value)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return int(parsed.timestamp() * 1000)
+
+
+def field_equal(name: str, left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    try:
+        if name in DATE_FIELDS and left not in (None, "") and right not in (None, ""):
+            return date_milliseconds(left) == date_milliseconds(right)
+        if name == "importance_factors":
+            return json.loads(left) == json.loads(right)
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return False
+
+
+def to_table_fields(row: dict[str, Any], field_types: dict[str, str] | None = None) -> dict[str, Any]:
     domains = row.get("domains")
     if domains is None:
         domains = []
@@ -43,7 +69,7 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
         deadline_text_value = datetime.fromtimestamp(int(deadline_at), ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
     else:
         deadline_text_value = ""
-    return {
+    fields = {
         **intake_table_fields(row.get("project_intake") or (row.get("label") or {}).get("project_intake"), row.get("content_text") or ""),
         "id": str(row.get("id", "") or ""),
         "url": str(row.get("url", "") or ""),
@@ -61,6 +87,10 @@ def to_table_fields(row: dict[str, Any]) -> dict[str, str]:
         "importance_factors": json.dumps(row.get("importance_factors") or {}, ensure_ascii=False),
         "attachments": attachment_links,
     }
+    for name in DATE_FIELDS:
+        if fields.get(name) not in (None, "") and (field_types or {}).get(name, "date") == "date":
+            fields[name] = date_milliseconds(fields[name])
+    return fields
 
 
 def load_rows(db_path: Path) -> list[dict[str, Any]]:
@@ -116,15 +146,19 @@ class NotableAPI:
         headers = self.models.GetAllFieldsHeaders(x_acs_dingtalk_access_token=self.token)
         request = self.models.GetAllFieldsRequest(operator_id=self.operator_id)
         response = self.client.get_all_fields_with_options(self.base_id, self.sheet_id, request, headers, self.runtime)
-        existing = {str(item.get("name")) for item in (response.body.to_map().get("value") or [])}
+        self.field_types = {str(item.get("name")): item.get("type") for item in (response.body.to_map().get("value") or [])}
         create_headers = self.models.CreateFieldHeaders(x_acs_dingtalk_access_token=self.token)
         for name in field_names:
-            if name in existing:
+            if name in self.field_types:
+                if name in DATE_FIELDS and self.field_types[name] not in ("date", "text"):
+                    raise RuntimeError(f"Unsupported field type for {name}: {self.field_types[name]}")
                 continue
-            create = self.models.CreateFieldRequest(name=name, type="text", operator_id=self.operator_id)
+            kind = "date" if name in DATE_FIELDS else "text"
+            create = self.models.CreateFieldRequest(name=name, type=kind, property={"formatter": DATE_FIELDS[name]} if kind == "date" else None, operator_id=self.operator_id)
             self.client.create_field_with_options(self.base_id, self.sheet_id, create, create_headers, self.runtime)
+            self.field_types[name] = kind
 
-    def insert_records(self, fields_list: list[dict[str, str]]) -> None:
+    def insert_records(self, fields_list: list[dict[str, Any]]) -> None:
         if not fields_list:
             return
         headers = self.models.InsertRecordsHeaders(x_acs_dingtalk_access_token=self.token)
@@ -144,18 +178,21 @@ def sync_rows(api: Any, rows: list[dict[str, Any]], mode: str = "incremental", b
     by_id = {str(r.get("fields", {}).get("id")): r for r in remote if r.get("fields", {}).get("id") is not None}
     inserts, updates = [], []
     unchanged = 0
+    field_types = getattr(api, "field_types", None)
+    if not isinstance(field_types, dict):
+        field_types = None
     for row in rows:
-        fields = {key:value for key,value in to_table_fields(row).items() if value not in (None, "") and not (key == "importance_factors" and value == "{}")}
+        fields = {key:value for key,value in to_table_fields(row, field_types).items() if value not in (None, "") and not (key == "importance_factors" and value == "{}")}
         old = by_id.get(fields["id"])
         if old:
             # Never mix a newly extracted project with a differently named manual entry.
             old_name = old.get("fields", {}).get("正式项目名称")
             identity_conflict = bool(old_name and fields.get("正式项目名称") and old_name != fields["正式项目名称"])
             fields = {key:value for key,value in fields.items()
-                      if key not in FIELD_NAMES.values() or (not identity_conflict and old.get("fields",{}).get(key) in (None,"",value))}
+                      if key not in FIELD_NAMES.values() or (not identity_conflict and (old.get("fields",{}).get(key) in (None,"") or field_equal(key, old.get("fields",{}).get(key), value)))}
         if old is None:
             inserts.append(fields)
-        elif mode == "full" or {k: old.get("fields", {}).get(k, "") for k in fields} != fields:
+        elif mode == "full" or any(not field_equal(k, old.get("fields", {}).get(k, ""), v) for k, v in fields.items()):
             updates.append({"id": old["id"], "fields": fields})
         else:
             unchanged += 1

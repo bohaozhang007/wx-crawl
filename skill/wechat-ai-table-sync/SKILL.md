@@ -53,7 +53,7 @@ no corresponding fields.
 
 `deadline_at` is formatted in Asia/Shanghai time, `deadline_text` preserves source
 wording, and `attachments` contains original URLs separated by newlines. The sync ensures
-these managed text fields exist but never deletes unrelated table fields.
+these managed fields exist but never deletes unrelated table fields.
 
 ## Prerequisites
 
@@ -80,7 +80,7 @@ for a controlled test or another authorized table.
 ## Procedure
 
 1. Load all rows from SQLite `articles`, ordered by `id`; parse `domains_json`.
-   Completion criterion: every source row has a string value for the managed fields.
+   Completion criterion: every source row has correctly typed values for the managed fields.
 2. Obtain a DingTalk access token from the configured application credentials.
    Completion criterion: token acquisition succeeds without exposing its value.
 3. List all target records with pagination. Completion criterion: every remote
@@ -88,7 +88,7 @@ for a controlled test or another authorized table.
 4. Index remote records by their `fields.id` value. Completion criterion: duplicate
    source IDs are not created.
 5. Map each database row to the managed field schema. Convert values to
-   strings; join domain labels with commas.
+   strings except native date columns (Unix milliseconds); join domain labels with commas.
 6. In incremental mode, insert missing IDs and update only changed rows. In full
    mode, update every existing matching ID and insert missing IDs. The script does
    not delete remote records absent from SQLite.
@@ -207,8 +207,8 @@ Evidence must be from the actual article, not copied from this example.
 ## Project intake fields (2026-10-09)
 
 Do not modify 项目入库表单 or its DingTalk automation. Enrich only 爬取公众号情况日志.
-The seven additional text columns are 正式项目名称、主管部门、申报金额（万元）、申报开始日期、
-申报截止日期、申报要求摘要、预期成果. Dates use YYYY-MM-DD; amounts use decimal RMB万元.
+The seven additional columns are 正式项目名称、主管部门、申报金额（万元）、申报开始日期、
+申报截止日期、申报要求摘要、预期成果. Start/end dates use native date columns displayed as YYYY-MM-DD; amounts use decimal RMB万元.
 Existing url/attachments remain the reference-link/attachment sources.
 
 New model outputs include optional project_intake (independent protocol version 1).
@@ -235,3 +235,21 @@ Optional historical enrichment (does not send alerts, change decisions or sync):
 add `--article-id <id>` or `--limit <n>` to scope and `--apply` to persist with a
 SQLite backup. Inspect the audit, then use the existing sync entry point. Failed
 extractions remain unmodified. Do not overwrite or rebuild the target intake form.
+
+
+## Native date fields (2026-10-10)
+
+`deadline_at`, `申报开始日期`, `申报截止日期` must be created as `date` fields.
+Write Unix milliseconds; interpret date-only extraction as Asia/Shanghai midnight.
+Preserve deadline_at time precision (display YYYY-MM-DD HH:mm:ss). Display the two
+intake dates as YYYY-MM-DD. SQLite timestamps remain seconds and extracted dates
+remain ISO strings; conversion belongs only at the Notable sync boundary.
+
+Read actual field types before writing. Existing text columns temporarily retain
+formatted text until converted in the DingTalk UI; never delete/recreate columns
+because automation references their IDs. The installed SDK UpdateField request has no type parameter. A raw request
+returned HTTP 200 while the immediate readback still showed text; a later readback
+confirmed all three dates with unchanged IDs. Never infer completion from HTTP
+status alone: verify actual field metadata and preserved values.
+Unknown dates remain omitted, and nonempty manual intake dates are preserved.
+Compare date values and importance_factors JSON semantically for idempotent sync.
